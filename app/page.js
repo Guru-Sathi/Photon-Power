@@ -1,4 +1,4 @@
-import Transmitter from '../components/Transmitter';
+import PhotonInterface from '../components/PhotonInterface';
 
 export default function Home() {
   return (
@@ -20,7 +20,7 @@ export default function Home() {
           </p>
         </header>
 
-        <Transmitter />
+        <PhotonInterface />
 
         <footer className="w-full text-center border-t border-zinc-900 pt-8 mt-12">
             <p className="text-xs text-zinc-600 uppercase tracking-widest font-mono">
