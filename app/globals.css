@@ -1,12 +1,4 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@layer base {
-  body {
-    @apply bg-zinc-950 text-zinc-100 antialiased;
-  }
-}
+@import "tailwindcss";
 
 @layer utilities {
   .image-pixelated {
