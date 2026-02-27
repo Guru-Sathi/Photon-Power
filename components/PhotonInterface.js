@@ -21,8 +21,12 @@ export default function PhotonInterface() {
 
   // Probe State
   const processingCanvasRef = useRef(null);
-  const [probeRGB, setProbeRGB] = useState({ r: 0, g: 0, b: 0 });
-  const [isLocked, setIsLocked] = useState(false);
+  const [probeData, setProbeData] = useState({
+      left: { r: 0, g: 0, b: 0, locked: false },
+      right: { r: 0, g: 0, b: 0, locked: false },
+      fullLock: false,
+      distance: 0
+  });
   const requestRef = useRef();
   const lastLogTime = useRef(0);
 
@@ -85,7 +89,6 @@ export default function PhotonInterface() {
         video: { facingMode: 'environment', zoom: true }
       });
 
-      // Handle Zoom Capabilities
       const videoTrack = stream.getVideoTracks()[0];
       const capabilities = videoTrack.getCapabilities();
 
@@ -146,6 +149,24 @@ export default function PhotonInterface() {
   }, [cameraStream]);
 
   // --- PIXEL PROBE LOGIC ---
+  const getAverageRGB = (ctx, x, y, size) => {
+    const frameData = ctx.getImageData(x - size / 2, y - size / 2, size, size);
+    const data = frameData.data;
+    let r = 0, g = 0, b = 0;
+    const count = data.length / 4;
+
+    for (let i = 0; i < data.length; i += 4) {
+        r += data[i];
+        g += data[i + 1];
+        b += data[i + 2];
+    }
+    return {
+        r: Math.round(r / count),
+        g: Math.round(g / count),
+        b: Math.round(b / count)
+    };
+  };
+
   const processFrame = () => {
     if (!videoRef.current || !processingCanvasRef.current || !isScanning) return;
 
@@ -154,48 +175,40 @@ export default function PhotonInterface() {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        // Set canvas dimensions to match video
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
-
-        // Draw current video frame
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Calculate center probe zone
-        const centerX = Math.floor(canvas.width / 2);
+        // Define Anchor Probes (20% from Left, 20% from Right, Centered Vertically)
         const centerY = Math.floor(canvas.height / 2);
-        const halfProbe = PROBE_SIZE / 2;
+        const leftX = Math.floor(canvas.width * 0.2);
+        const rightX = Math.floor(canvas.width * 0.8);
 
-        // Get pixel data for 20x20 center area
-        const frameData = ctx.getImageData(centerX - halfProbe, centerY - halfProbe, PROBE_SIZE, PROBE_SIZE);
-        const data = frameData.data; // RGBA array
+        // Sample Left Probe
+        const leftRGB = getAverageRGB(ctx, leftX, centerY, PROBE_SIZE);
+        const leftLocked = (leftRGB.r > 200 && leftRGB.g < 100 && leftRGB.b > 200);
 
-        let rTotal = 0, gTotal = 0, bTotal = 0;
-        const pixelCount = data.length / 4;
+        // Sample Right Probe
+        const rightRGB = getAverageRGB(ctx, rightX, centerY, PROBE_SIZE);
+        const rightLocked = (rightRGB.r > 200 && rightRGB.g < 100 && rightRGB.b > 200);
 
-        for (let i = 0; i < data.length; i += 4) {
-            rTotal += data[i];
-            gTotal += data[i + 1];
-            bTotal += data[i + 2];
-        }
+        const fullLock = leftLocked && rightLocked;
+        const distance = rightX - leftX; // Simple horizontal distance for now
 
-        const rAvg = Math.round(rTotal / pixelCount);
-        const gAvg = Math.round(gTotal / pixelCount);
-        const bAvg = Math.round(bTotal / pixelCount);
+        setProbeData({
+            left: { ...leftRGB, locked: leftLocked },
+            right: { ...rightRGB, locked: rightLocked },
+            fullLock,
+            distance
+        });
 
-        setProbeRGB({ r: rAvg, g: gAvg, b: bAvg });
-
-        // Handshake Logic: Magenta (R > 200, G < 100, B > 200)
-        // Adjust threshold slightly to be robust in real lighting?
-        // User spec: R > 200, G < 100, B > 200.
-        const locked = (rAvg > 200 && gAvg < 100 && bAvg > 200);
-        setIsLocked(locked);
-
-        // Console Log Throttling (3 times per second -> ~333ms)
         const now = Date.now();
         if (now - lastLogTime.current > 333) {
-            const hex = "#" + ((1 << 24) + (rAvg << 16) + (gAvg << 8) + bAvg).toString(16).slice(1).toUpperCase();
-            console.log(`Probe: RGB(${rAvg}, ${gAvg}, ${bAvg}) | HEX: ${hex} | Locked: ${locked}`);
+            if (fullLock) {
+                console.log(`FULL WIDTH LOCKED: ${distance}px`);
+            } else {
+                 // console.log(`L: ${leftLocked} R: ${rightLocked}`);
+            }
             lastLogTime.current = now;
         }
     }
@@ -203,7 +216,6 @@ export default function PhotonInterface() {
     requestRef.current = requestAnimationFrame(processFrame);
   };
 
-  // Start processing loop when scanning starts
   useEffect(() => {
     if (isScanning) {
         requestRef.current = requestAnimationFrame(processFrame);
@@ -248,8 +260,8 @@ export default function PhotonInterface() {
         {/* TRANSMITTER UI */}
         {mode === 'TX' && (
           <div className="flex flex-col md:flex-row gap-12 items-center justify-between w-full animate-in fade-in duration-500">
-            {/* Left: Canvas */}
-            <div className="flex-1 flex flex-col items-center justify-center space-y-8 w-full order-last md:order-first">
+             {/* Left: Canvas */}
+             <div className="flex-1 flex flex-col items-center justify-center space-y-8 w-full order-last md:order-first">
               <div className="relative group p-1 bg-gradient-to-br from-zinc-700 to-zinc-800 rounded-xl shadow-2xl transition-all duration-500 hover:shadow-cyan-500/20">
                   <canvas
                       ref={canvasRef}
@@ -333,7 +345,7 @@ export default function PhotonInterface() {
             <div className="text-center space-y-2">
                 <h2 className="text-2xl font-semibold text-white tracking-tight">Optical Receiver</h2>
                 <p className="text-zinc-400 text-sm max-w-md">
-                    Align the camera with the transmitter grid. Ensure all 4 magenta anchors are visible.
+                    Align the two search zones with the Left and Right Magenta Anchors.
                 </p>
             </div>
 
@@ -354,7 +366,7 @@ export default function PhotonInterface() {
               {!isScanning && !cameraError && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center space-y-4 bg-zinc-900/90">
                     <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center mb-2">
-                        <svg className="w-8 h-8 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.818v6.364a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                         <svg className="w-8 h-8 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.818v6.364a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
                     </div>
                     <button
                         onClick={startCamera}
@@ -369,7 +381,7 @@ export default function PhotonInterface() {
               {cameraError && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center space-y-4 bg-zinc-900/90 p-8 text-center">
                     <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center text-red-500 mb-2">
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
                     </div>
                     <p className="text-red-400 font-medium">{cameraError}</p>
                     <button
@@ -381,31 +393,38 @@ export default function PhotonInterface() {
                 </div>
               )}
 
-              {/* Scanning Overlay */}
+              {/* Scanning Overlay (Double Probe) */}
               {isScanning && (
                 <div className="absolute inset-0 pointer-events-none">
-                    {/* Corner Guides */}
-                    <div className="absolute top-8 left-8 w-8 h-8 border-t-2 border-l-2 border-cyan-500/50 rounded-tl-lg"></div>
-                    <div className="absolute top-8 right-8 w-8 h-8 border-t-2 border-r-2 border-cyan-500/50 rounded-tr-lg"></div>
-                    <div className="absolute bottom-8 left-8 w-8 h-8 border-b-2 border-l-2 border-cyan-500/50 rounded-bl-lg"></div>
-                    <div className="absolute bottom-8 right-8 w-8 h-8 border-b-2 border-r-2 border-cyan-500/50 rounded-br-lg"></div>
-
                     {/* Scanning Line */}
-                    <div className="absolute inset-0 bg-gradient-to-b from-transparent via-cyan-500/10 to-transparent animate-scan"></div>
+                    <div className="absolute inset-0 bg-gradient-to-b from-transparent via-cyan-500/5 to-transparent animate-scan"></div>
 
-                    {/* Center Crosshair (Dynamic Color) */}
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4">
-                        <div className={`absolute top-1/2 left-0 w-full h-[2px] transition-colors duration-200 ${isLocked ? 'bg-green-400 shadow-[0_0_8px_#4ade80]' : 'bg-white/50'}`}></div>
-                        <div className={`absolute left-1/2 top-0 h-full w-[2px] transition-colors duration-200 ${isLocked ? 'bg-green-400 shadow-[0_0_8px_#4ade80]' : 'bg-white/50'}`}></div>
+                    {/* LEFT PROBE (20% from Left) */}
+                    <div className="absolute top-1/2 left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.left.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
+                         {/* Text */}
+                         <div className="absolute top-full mt-2 text-[9px] font-mono text-zinc-400 whitespace-nowrap bg-black/50 px-1 rounded">
+                             {probeData.left.locked ? <span className="text-green-400">LOCKED</span> : "SEARCHING"}
+                         </div>
                     </div>
 
-                    {/* Data Overlay */}
-                    <div className="absolute top-1/2 left-1/2 translate-x-4 -translate-y-6 text-[10px] font-mono font-bold bg-black/60 px-2 py-1 rounded border border-white/10 backdrop-blur-sm">
-                        <div className={isLocked ? "text-green-400" : "text-zinc-400"}>
-                            R:{probeRGB.r} G:{probeRGB.g} B:{probeRGB.b}
-                        </div>
-                        {isLocked && <div className="text-green-400 animate-pulse">LOCKED</div>}
+                    {/* RIGHT PROBE (80% from Left) */}
+                    <div className="absolute top-1/2 left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.right.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
+                         {/* Text */}
+                         <div className="absolute top-full mt-2 text-[9px] font-mono text-zinc-400 whitespace-nowrap bg-black/50 px-1 rounded">
+                             {probeData.right.locked ? <span className="text-green-400">LOCKED</span> : "SEARCHING"}
+                         </div>
                     </div>
+
+                    {/* Full Lock Connector */}
+                    {probeData.fullLock && (
+                         <div className="absolute top-1/2 left-[20%] right-[20%] h-[1px] bg-green-400/50 shadow-[0_0_8px_#4ade80]">
+                            <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-xs font-mono font-bold text-green-400 bg-black/80 px-2 py-0.5 rounded border border-green-500/30">
+                                WIDTH: {probeData.distance}px
+                            </div>
+                         </div>
+                    )}
                 </div>
               )}
             </div>
