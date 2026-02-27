@@ -16,6 +16,8 @@ export default function PhotonInterface() {
   const [cameraStream, setCameraStream] = useState(null);
   const [cameraError, setCameraError] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [zoomCapabilities, setZoomCapabilities] = useState(null);
 
   // Constants
   const COLS = 10;
@@ -72,8 +74,25 @@ export default function PhotonInterface() {
     try {
       setCameraError(null);
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }
+        video: { facingMode: 'environment', zoom: true }
       });
+
+      // Handle Zoom Capabilities
+      const videoTrack = stream.getVideoTracks()[0];
+      const capabilities = videoTrack.getCapabilities();
+
+      // Check if 'zoom' is in capabilities (it might not be on all browsers/devices)
+      if (capabilities && 'zoom' in capabilities) {
+        setZoomCapabilities({
+          min: capabilities.zoom.min,
+          max: capabilities.zoom.max,
+          step: capabilities.zoom.step
+        });
+        setZoomLevel(capabilities.zoom.min);
+      } else {
+          setZoomCapabilities(null);
+      }
+
       setCameraStream(stream);
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -82,6 +101,18 @@ export default function PhotonInterface() {
     } catch (err) {
       console.error("Camera access denied:", err);
       setCameraError("Camera access denied. Please check permissions.");
+    }
+  };
+
+  const handleZoomChange = (event) => {
+    const newZoom = Number(event.target.value);
+    setZoomLevel(newZoom);
+
+    if (cameraStream) {
+      const videoTrack = cameraStream.getVideoTracks()[0];
+      videoTrack.applyConstraints({
+        advanced: [{ zoom: newZoom }]
+      });
     }
   };
 
@@ -289,12 +320,31 @@ export default function PhotonInterface() {
             </div>
 
             {isScanning && (
+              <div className="flex flex-col items-center gap-6 w-full max-w-xs">
+                {/* Zoom Slider */}
+                {zoomCapabilities && (
+                  <div className="w-full flex items-center gap-3 px-4 py-2 bg-zinc-900/80 rounded-full border border-zinc-800">
+                    <span className="text-xs text-zinc-500 font-mono">-</span>
+                    <input
+                      type="range"
+                      min={zoomCapabilities.min}
+                      max={zoomCapabilities.max}
+                      step={zoomCapabilities.step}
+                      value={zoomLevel}
+                      onChange={handleZoomChange}
+                      className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                    />
+                    <span className="text-xs text-zinc-500 font-mono">+</span>
+                  </div>
+                )}
+
                  <button
                     onClick={stopCamera}
                     className="px-6 py-2 text-zinc-500 hover:text-white transition-colors text-sm uppercase tracking-widest font-mono"
                 >
                     Stop Feed
                 </button>
+              </div>
             )}
           </div>
         )}
