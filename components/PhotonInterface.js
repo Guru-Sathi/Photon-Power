@@ -19,11 +19,19 @@ export default function PhotonInterface() {
   const [zoomLevel, setZoomLevel] = useState(1);
   const [zoomCapabilities, setZoomCapabilities] = useState(null);
 
+  // Probe State
+  const processingCanvasRef = useRef(null);
+  const [probeRGB, setProbeRGB] = useState({ r: 0, g: 0, b: 0 });
+  const [isLocked, setIsLocked] = useState(false);
+  const requestRef = useRef();
+  const lastLogTime = useRef(0);
+
   // Constants
   const COLS = 10;
   const ROWS = 10;
   const CELL_SIZE = 30;
   const CANVAS_SIZE = COLS * CELL_SIZE;
+  const PROBE_SIZE = 20;
 
   // --- TRANSMITTER LOGIC ---
   useEffect(() => {
@@ -81,7 +89,6 @@ export default function PhotonInterface() {
       const videoTrack = stream.getVideoTracks()[0];
       const capabilities = videoTrack.getCapabilities();
 
-      // Check if 'zoom' is in capabilities (it might not be on all browsers/devices)
       if (capabilities && 'zoom' in capabilities) {
         setZoomCapabilities({
           min: capabilities.zoom.min,
@@ -122,16 +129,89 @@ export default function PhotonInterface() {
       setCameraStream(null);
     }
     setIsScanning(false);
+    if (requestRef.current) {
+      cancelAnimationFrame(requestRef.current);
+    }
   };
 
   useEffect(() => {
-    // Cleanup on unmount or mode switch
     return () => {
       if (cameraStream) {
         cameraStream.getTracks().forEach(track => track.stop());
       }
+      if (requestRef.current) {
+        cancelAnimationFrame(requestRef.current);
+      }
     };
   }, [cameraStream]);
+
+  // --- PIXEL PROBE LOGIC ---
+  const processFrame = () => {
+    if (!videoRef.current || !processingCanvasRef.current || !isScanning) return;
+
+    const video = videoRef.current;
+    const canvas = processingCanvasRef.current;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        // Set canvas dimensions to match video
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        // Draw current video frame
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        // Calculate center probe zone
+        const centerX = Math.floor(canvas.width / 2);
+        const centerY = Math.floor(canvas.height / 2);
+        const halfProbe = PROBE_SIZE / 2;
+
+        // Get pixel data for 20x20 center area
+        const frameData = ctx.getImageData(centerX - halfProbe, centerY - halfProbe, PROBE_SIZE, PROBE_SIZE);
+        const data = frameData.data; // RGBA array
+
+        let rTotal = 0, gTotal = 0, bTotal = 0;
+        const pixelCount = data.length / 4;
+
+        for (let i = 0; i < data.length; i += 4) {
+            rTotal += data[i];
+            gTotal += data[i + 1];
+            bTotal += data[i + 2];
+        }
+
+        const rAvg = Math.round(rTotal / pixelCount);
+        const gAvg = Math.round(gTotal / pixelCount);
+        const bAvg = Math.round(bTotal / pixelCount);
+
+        setProbeRGB({ r: rAvg, g: gAvg, b: bAvg });
+
+        // Handshake Logic: Magenta (R > 200, G < 100, B > 200)
+        // Adjust threshold slightly to be robust in real lighting?
+        // User spec: R > 200, G < 100, B > 200.
+        const locked = (rAvg > 200 && gAvg < 100 && bAvg > 200);
+        setIsLocked(locked);
+
+        // Console Log Throttling (3 times per second -> ~333ms)
+        const now = Date.now();
+        if (now - lastLogTime.current > 333) {
+            const hex = "#" + ((1 << 24) + (rAvg << 16) + (gAvg << 8) + bAvg).toString(16).slice(1).toUpperCase();
+            console.log(`Probe: RGB(${rAvg}, ${gAvg}, ${bAvg}) | HEX: ${hex} | Locked: ${locked}`);
+            lastLogTime.current = now;
+        }
+    }
+
+    requestRef.current = requestAnimationFrame(processFrame);
+  };
+
+  // Start processing loop when scanning starts
+  useEffect(() => {
+    if (isScanning) {
+        requestRef.current = requestAnimationFrame(processFrame);
+    } else {
+        if (requestRef.current) cancelAnimationFrame(requestRef.current);
+    }
+  }, [isScanning]);
+
 
   // --- RENDER ---
   return (
@@ -267,6 +347,9 @@ export default function PhotonInterface() {
                 className={`w-full h-full object-cover transition-opacity duration-500 ${isScanning ? 'opacity-100' : 'opacity-0'}`}
               />
 
+              {/* Hidden Processing Canvas */}
+              <canvas ref={processingCanvasRef} className="hidden" />
+
               {/* Not Scanning State */}
               {!isScanning && !cameraError && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center space-y-4 bg-zinc-900/90">
@@ -310,10 +393,18 @@ export default function PhotonInterface() {
                     {/* Scanning Line */}
                     <div className="absolute inset-0 bg-gradient-to-b from-transparent via-cyan-500/10 to-transparent animate-scan"></div>
 
-                    {/* Center Crosshair */}
+                    {/* Center Crosshair (Dynamic Color) */}
                     <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4">
-                        <div className="absolute top-1/2 left-0 w-full h-[1px] bg-white/30"></div>
-                        <div className="absolute left-1/2 top-0 h-full w-[1px] bg-white/30"></div>
+                        <div className={`absolute top-1/2 left-0 w-full h-[2px] transition-colors duration-200 ${isLocked ? 'bg-green-400 shadow-[0_0_8px_#4ade80]' : 'bg-white/50'}`}></div>
+                        <div className={`absolute left-1/2 top-0 h-full w-[2px] transition-colors duration-200 ${isLocked ? 'bg-green-400 shadow-[0_0_8px_#4ade80]' : 'bg-white/50'}`}></div>
+                    </div>
+
+                    {/* Data Overlay */}
+                    <div className="absolute top-1/2 left-1/2 translate-x-4 -translate-y-6 text-[10px] font-mono font-bold bg-black/60 px-2 py-1 rounded border border-white/10 backdrop-blur-sm">
+                        <div className={isLocked ? "text-green-400" : "text-zinc-400"}>
+                            R:{probeRGB.r} G:{probeRGB.g} B:{probeRGB.b}
+                        </div>
+                        {isLocked && <div className="text-green-400 animate-pulse">LOCKED</div>}
                     </div>
                 </div>
               )}
