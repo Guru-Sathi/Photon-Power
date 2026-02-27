@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { textToBinary, createChunks, COLORS } from '@/lib/protocol';
+import { textToBinary, createChunks, COLORS, getColorBits, binaryToASCII } from '@/lib/protocol';
 
 export default function PhotonInterface() {
   const [mode, setMode] = useState('TX');
@@ -24,6 +24,7 @@ export default function PhotonInterface() {
   const [boundingBox, setBoundingBox] = useState(null);
   const [isLocked, setIsLocked] = useState(false);
   const [scaleWarning, setScaleWarning] = useState(false);
+  const [decodedMessage, setDecodedMessage] = useState("");
 
   const requestRef = useRef();
   const lastLogTime = useRef(0);
@@ -281,6 +282,46 @@ export default function PhotonInterface() {
              setBoundingBox(null);
         }
 
+        // --- DECODING LOGIC ---
+        if (latchedLock && !isTooClose) {
+            // The bounding box represents the full 14x14 grid
+            const boxW = maxX - minX;
+            const boxH = maxY - minY;
+            const cellW = boxW / 14;
+            const cellH = boxH / 14;
+
+            let bitstream = "";
+
+            // Sample the 10x10 data core (rows 2-11, cols 2-11)
+            for (let r = 2; r < 12; r++) {
+                for (let c = 2; c < 12; c++) {
+                    // Center of the cell
+                    const cx = Math.floor(minX + (c + 0.5) * cellW);
+                    const cy = Math.floor(minY + (r + 0.5) * cellH);
+
+                    // Make sure we don't go out of bounds
+                    if (cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
+                        const i = (cy * canvas.width + cx) * 4;
+                        const red = data[i];
+                        const green = data[i + 1];
+                        const blue = data[i + 2];
+
+                        const bits = getColorBits(red, green, blue);
+                        bitstream += bits;
+                    } else {
+                        bitstream += "000"; // fallback
+                    }
+                }
+            }
+
+            const text = binaryToASCII(bitstream);
+
+            // Filter noise by only updating if different and has some length
+            if (text !== decodedMessage) {
+                setDecodedMessage(text);
+            }
+        }
+
         // Debug Log
         if (now - lastLogTime.current > 500) {
             if (latchedLock && boundingBox) {
@@ -514,9 +555,19 @@ export default function PhotonInterface() {
               )}
             </div>
 
-            {/* Controls */}
+            {/* Controls & Output */}
             {isScanning && (
-              <div className="w-full flex flex-col gap-4 max-w-xs">
+              <div className="w-full flex flex-col gap-4 max-w-md mt-4">
+                  {/* Decoded Output */}
+                  <div className="w-full bg-zinc-950/80 border border-zinc-800 rounded-xl p-4 min-h-[100px] flex flex-col">
+                      <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest mb-2 flex justify-between">
+                          <span>Decoded Message</span>
+                          {isLocked && !boundingBox?.isTooClose && <span className="text-green-500 animate-pulse">Receiving...</span>}
+                      </span>
+                      <p className="text-white font-mono text-sm break-all leading-relaxed flex-1">
+                          {decodedMessage || <span className="text-zinc-700">Waiting for lock...</span>}
+                      </p>
+                  </div>
 
                   {/* Zoom Slider (Conditional) */}
                   {zoomCapabilities && (
