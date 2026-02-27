@@ -1,4 +1,5 @@
 'use client';
+
 import { useState, useRef, useEffect } from 'react';
 import { textToBinary, createChunks, COLORS } from '@/lib/protocol';
 
@@ -7,13 +8,11 @@ export default function Transmitter() {
   const [encodedChunks, setEncodedChunks] = useState([]);
   const canvasRef = useRef(null);
 
-  // Constants for the grid
   const COLS = 10;
   const ROWS = 10;
-  const CELL_SIZE = 30; // Internal resolution size
+  const CELL_SIZE = 30;
   const CANVAS_SIZE = COLS * CELL_SIZE;
 
-  // Update chunks when input changes
   useEffect(() => {
     if (!inputText) {
       setEncodedChunks([]);
@@ -24,13 +23,11 @@ export default function Transmitter() {
     setEncodedChunks(chunks);
   }, [inputText]);
 
-  // Draw to canvas when chunks update
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
 
-    // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const totalCells = COLS * ROWS;
@@ -38,31 +35,22 @@ export default function Transmitter() {
     for (let i = 0; i < totalCells; i++) {
       let colorCode;
 
-      // 1. ANCHOR LOGIC: Magenta corners (Top-L, Top-R, Bot-L, Bot-R)
-      // i=0, i=9, i=90, i=99
       if (i === 0 || i === 9 || i === 90 || i === 99) {
-        colorCode = "101"; // Magenta (#FF00FF)
+        colorCode = "101"; // Magenta
       }
-      // 2. CLOCK LOGIC: Index 1 is Sync Heartbeat (Black)
       else if (i === 1) {
         colorCode = "000"; // Black
       }
-      // 3. DATA LOGIC: Start at index 2
-      // We need to map grid index `i` to chunk index `chunkIndex`.
-      // Since data starts at i=2, chunkIndex = i - 2.
       else {
           const chunkIndex = i - 2;
           if (chunkIndex >= 0 && chunkIndex < encodedChunks.length) {
                colorCode = encodedChunks[chunkIndex];
           } else {
-              // 4. FILLER LOGIC: Black
               colorCode = "000";
           }
       }
 
       const color = COLORS[colorCode] || "#000000";
-
-      // Calculate coordinates
       const x = (i % COLS) * CELL_SIZE;
       const y = Math.floor(i / COLS) * CELL_SIZE;
 
@@ -71,62 +59,87 @@ export default function Transmitter() {
     }
   }, [encodedChunks]);
 
-
   return (
-    <div className="flex flex-col items-center gap-6 p-8 rounded-xl bg-gray-900/80 backdrop-blur-sm shadow-[0_0_50px_rgba(0,0,0,0.8)] border border-gray-800 w-full max-w-lg mx-auto transform transition-all hover:scale-[1.01]">
-      <div className="text-center space-y-2">
-        <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 tracking-tighter font-mono filter drop-shadow-[0_0_10px_rgba(0,255,255,0.5)]">
-            PHOTON POWER
-        </h2>
-        <div className="h-1 w-24 mx-auto bg-gradient-to-r from-transparent via-cyan-500 to-transparent opacity-50"></div>
-      </div>
+    <div className="bg-zinc-900/40 border border-zinc-800/50 rounded-3xl p-8 backdrop-blur-2xl shadow-2xl w-full max-w-5xl mx-auto flex flex-col md:flex-row gap-12 items-center justify-between">
 
-      <div className="relative group w-full flex justify-center py-4">
-        {/* Glow effect container */}
-        <div className="absolute inset-0 bg-gradient-to-r from-purple-600/30 to-blue-600/30 rounded-full blur-3xl opacity-20 group-hover:opacity-40 transition-opacity duration-500"></div>
-
-        {/* Canvas container with specific styling */}
-        <div className="relative p-1 bg-gradient-to-br from-gray-700 to-gray-900 rounded-lg shadow-2xl">
+      {/* LEFT: Canvas Display */}
+      <div className="flex-1 flex flex-col items-center justify-center space-y-8 w-full order-last md:order-first">
+        <div className="relative group p-1 bg-gradient-to-br from-zinc-700 to-zinc-800 rounded-xl shadow-2xl transition-all duration-500 hover:shadow-cyan-500/20">
             <canvas
                 ref={canvasRef}
-                width={300} // Hardcoded 10 cols * 30px
-                height={300} // Hardcoded 10 rows * 30px
-                className="block bg-black shadow-[0_0_15px_rgba(0,0,0,1)] rounded-sm"
-                style={{
-                    imageRendering: 'pixelated',
-                    width: '100%',
-                    maxWidth: '300px',
-                    height: 'auto',
-                    aspectRatio: '1/1'
-                }}
+                width={CANVAS_SIZE}
+                height={CANVAS_SIZE}
+                className="block w-full max-w-[320px] h-auto aspect-square object-contain bg-black rounded-lg"
+                style={{ imageRendering: 'pixelated' }}
             />
         </div>
-      </div>
-
-      <div className="w-full space-y-1">
-        <label htmlFor="input-text" className="flex justify-between items-end text-[10px] font-bold text-gray-500 font-mono uppercase tracking-widest px-1">
-            <span>Payload Stream</span>
-            <span className={encodedChunks.length > 94 ? "text-red-500 animate-pulse" : "text-gray-600"}>
-                {encodedChunks.length} / 94 CHUNKS
+        <div className="flex items-center gap-2 px-4 py-2 bg-zinc-950/50 rounded-full border border-zinc-800/50">
+            <div className={`w-2 h-2 rounded-full transition-colors duration-300 ${encodedChunks.length > 0 ? 'bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-zinc-600'}`}></div>
+            <span className="text-[10px] font-mono text-zinc-400 tracking-widest uppercase">
+                {encodedChunks.length > 0 ? 'Transmitting' : 'Standby'}
             </span>
-        </label>
-        <div className="relative">
-            <input
-            id="input-text"
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            placeholder="INITIATE SEQUENCE..."
-            className="w-full bg-black/50 border border-gray-700 text-cyan-400 px-4 py-4 rounded-lg focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 font-mono text-sm tracking-wider placeholder-gray-800 transition-all shadow-inner"
-            />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-cyan-500 shadow-[0_0_10px_#06b6d4] animate-pulse"></div>
         </div>
       </div>
 
-      <div className="text-[10px] text-gray-600 font-mono text-center w-full border-t border-gray-800 pt-4 mt-2">
-        <p>SYSTEM STATUS: <span className="text-green-500">ONLINE</span></p>
-        <p className="opacity-50">ANCHORS: LOCKED // SYNC: ACTIVE</p>
+      {/* RIGHT: Controls */}
+      <div className="flex-1 w-full flex flex-col justify-center space-y-10">
+        <div className="space-y-3 text-center md:text-left">
+            <h2 className="text-3xl font-semibold text-white tracking-tight">Data Stream</h2>
+            <p className="text-zinc-400 text-sm leading-relaxed max-w-md mx-auto md:mx-0">
+                Enter your payload to encode it into the 10x10 optical matrix. Ensure the receiver is aligned with the magenta anchors.
+            </p>
+        </div>
+
+        <div className="space-y-8">
+            <div className="relative group">
+                <input
+                    type="text"
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                    placeholder=" "
+                    id="floating_input"
+                    className="block px-0 py-4 w-full text-lg text-white bg-transparent border-b-2 border-zinc-700 appearance-none focus:outline-none focus:ring-0 focus:border-cyan-500 peer font-mono transition-colors"
+                    autoComplete="off"
+                />
+                <label
+                    htmlFor="floating_input"
+                    className="absolute text-sm text-zinc-500 duration-300 transform -translate-y-6 scale-75 top-3 -z-10 origin-[0] peer-focus:start-0 peer-focus:text-cyan-500 peer-placeholder-shown:scale-100 peer-placeholder-shown:translate-y-0 peer-placeholder-shown:top-1/2 peer-focus:top-3 peer-focus:scale-75 peer-focus:-translate-y-6 left-0 uppercase tracking-wider font-mono"
+                >
+                    Input Payload
+                </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <div className="bg-zinc-950/30 p-4 rounded-xl border border-zinc-800/50 hover:border-zinc-700 transition-colors">
+                    <span className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-mono">Chunks</span>
+                    <span className="text-4xl font-light text-white font-mono tracking-tighter">
+                        {String(encodedChunks.length).padStart(2, '0')}
+                    </span>
+                </div>
+                <div className="bg-zinc-950/30 p-4 rounded-xl border border-zinc-800/50 hover:border-zinc-700 transition-colors">
+                    <span className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-mono">Capacity</span>
+                    <span className="text-4xl font-light text-zinc-600 font-mono tracking-tighter">
+                        94
+                    </span>
+                </div>
+            </div>
+
+            {/* Visual Progress Bar */}
+            <div className="space-y-2 pt-2">
+                <div className="flex justify-between text-[10px] text-zinc-500 font-mono uppercase tracking-widest">
+                    <span>Buffer</span>
+                    <span>{Math.round((encodedChunks.length / 94) * 100)}%</span>
+                </div>
+                <div className="w-full bg-zinc-800/30 rounded-full h-1 overflow-hidden">
+                    <div
+                        className={`h-full rounded-full transition-all duration-500 ease-out ${encodedChunks.length > 90 ? 'bg-rose-500' : 'bg-cyan-500'}`}
+                        style={{ width: `${Math.min((encodedChunks.length / 94) * 100, 100)}%` }}
+                    ></div>
+                </div>
+            </div>
+        </div>
       </div>
+
     </div>
   );
 }
