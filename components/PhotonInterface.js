@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { textToBinary, createChunks, COLORS } from '@/lib/protocol';
 
 export default function PhotonInterface() {
-  const [mode, setMode] = useState('TX'); // 'TX' (Transmitter) or 'RX' (Receiver)
+  const [mode, setMode] = useState('TX');
 
   // TX State
   const [inputText, setInputText] = useState("");
@@ -19,31 +19,22 @@ export default function PhotonInterface() {
   const [zoomLevel, setZoomLevel] = useState(1);
   const [zoomCapabilities, setZoomCapabilities] = useState(null);
 
-  // Probe State
+  // Single-Anchor Projection State
   const processingCanvasRef = useRef(null);
-  const [probeData, setProbeData] = useState({
-      tl: { r: 0, g: 0, b: 0, locked: false }, // Top-Left
-      tr: { r: 0, g: 0, b: 0, locked: false }, // Top-Right
-      bl: { r: 0, g: 0, b: 0, locked: false }, // Bottom-Left
-      br: { r: 0, g: 0, b: 0, locked: false }, // Bottom-Right
-      center: { r: 0, g: 0, b: 0 }, // Center Data Probe
-      fullLock: false,
-      gridWidth: 0,
-      gridHeight: 0,
-      cellWidth: 0,
-      cellHeight: 0
-  });
+  const [cellSize, setCellSize] = useState(40); // User adjustable
+  const [isOriginLocked, setIsOriginLocked] = useState(false);
+
   const requestRef = useRef();
   const lastLogTime = useRef(0);
+  const lockLatch = useRef(0); // For single anchor latch
 
   // Constants
   const COLS = 10;
   const ROWS = 10;
-  const CELL_SIZE = 30;
+  const CELL_SIZE = 30; // For Transmitter rendering
   const CANVAS_SIZE = COLS * CELL_SIZE;
   const PROBE_SIZE = 20;
-  const VERTICAL_GAP = 0.1; // 10% from top/bottom (was 15%) - Increased reach
-  const HORIZONTAL_GAP = 0.2; // 20% from left/right
+  const GRID_COUNT = 10;
 
   // --- TRANSMITTER LOGIC ---
   useEffect(() => {
@@ -134,6 +125,10 @@ export default function PhotonInterface() {
     }
   };
 
+  const handleCellSizeChange = (delta) => {
+      setCellSize(prev => Math.max(5, prev + delta));
+  };
+
   const stopCamera = () => {
     if (cameraStream) {
       cameraStream.getTracks().forEach(track => track.stop());
@@ -156,7 +151,7 @@ export default function PhotonInterface() {
     };
   }, [cameraStream]);
 
-  // --- PIXEL PROBE LOGIC ---
+  // --- PIXEL PROBE LOGIC (SINGLE ANCHOR) ---
   const getAverageRGB = (ctx, x, y, size) => {
     const frameData = ctx.getImageData(x - size / 2, y - size / 2, size, size);
     const data = frameData.data;
@@ -187,77 +182,32 @@ export default function PhotonInterface() {
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Define 4 Anchor Probes based on Constants
-        const x1 = Math.floor(canvas.width * HORIZONTAL_GAP);
-        const x2 = Math.floor(canvas.width * (1 - HORIZONTAL_GAP));
-        const y1 = Math.floor(canvas.height * VERTICAL_GAP);
-        const y2 = Math.floor(canvas.height * (1 - VERTICAL_GAP));
+        // Center of the screen is our "Origin Anchor" (Top-Left of Grid)
+        const originX = Math.floor(canvas.width / 2);
+        const originY = Math.floor(canvas.height / 2);
 
-        // Sample 4 Anchors
-        const tlRGB = getAverageRGB(ctx, x1, y1, PROBE_SIZE);
-        const trRGB = getAverageRGB(ctx, x2, y1, PROBE_SIZE);
-        const blRGB = getAverageRGB(ctx, x1, y2, PROBE_SIZE);
-        const brRGB = getAverageRGB(ctx, x2, y2, PROBE_SIZE);
+        // Sample Origin
+        const originRGB = getAverageRGB(ctx, originX, originY, PROBE_SIZE);
 
-        // Handshake Logic: Magenta (R > 180, G < 120, B > 180)
-        const checkLock = (rgb) => (rgb.r > 180 && rgb.g < 120 && rgb.b > 180);
+        // Handshake: Magenta (R>180, G<120, B>180)
+        const isLocked = (originRGB.r > 180 && originRGB.g < 120 && originRGB.b > 180);
 
         const now = Date.now();
-        const LATCH_DURATION = 500; // ms
-
-        // Update Latches
-        if (checkLock(tlRGB)) lockLatches.current.tl = now;
-        if (checkLock(trRGB)) lockLatches.current.tr = now;
-        if (checkLock(blRGB)) lockLatches.current.bl = now;
-        if (checkLock(brRGB)) lockLatches.current.br = now;
-
-        // Check Latched Status
-        const tlLocked = (now - lockLatches.current.tl) < LATCH_DURATION;
-        const trLocked = (now - lockLatches.current.tr) < LATCH_DURATION;
-        const blLocked = (now - lockLatches.current.bl) < LATCH_DURATION;
-        const brLocked = (now - lockLatches.current.br) < LATCH_DURATION;
-
-        const fullLock = tlLocked && trLocked && blLocked && brLocked;
-
-        // Debug individual probes if not locked
-        const debugNow = Date.now();
-        if (debugNow - lastLogTime.current > 1000) { // Log every second
-             if (!fullLock) {
-                 // console.log(`Probes: TL(${tlRGB.r},${tlRGB.g},${tlRGB.b}) TR(${trRGB.r},${trRGB.g},${trRGB.b}) BL(${blRGB.r},${blRGB.g},${blRGB.b}) BR(${brRGB.r},${brRGB.g},${brRGB.b})`);
-             }
+        if (isLocked) {
+            lockLatch.current = now;
         }
 
-        // Calculate Dimensions
-        const gridWidth = x2 - x1;
-        const gridHeight = y2 - y1;
+        // Latch logic (500ms)
+        const latchedLock = (now - lockLatch.current) < 500;
+        setIsOriginLocked(latchedLock);
 
-        // Grid is 10x10 cells. Distance covers 9 intervals.
-        const cellWidth = gridWidth / 9;
-        const cellHeight = gridHeight / 9;
-
-        // Center Data Probe
-        const centerX = Math.floor(canvas.width / 2);
-        const centerY = Math.floor(canvas.height / 2);
-        const centerRGB = getAverageRGB(ctx, centerX, centerY, PROBE_SIZE);
-
-        setProbeData({
-            tl: { ...tlRGB, locked: tlLocked },
-            tr: { ...trRGB, locked: trLocked },
-            bl: { ...blRGB, locked: blLocked },
-            br: { ...brRGB, locked: brLocked },
-            center: centerRGB,
-            fullLock,
-            gridWidth,
-            gridHeight,
-            cellWidth,
-            cellHeight
-        });
-
-        if (now - lastLogTime.current > 333) {
-            if (fullLock) {
-                console.log(`PORTAL ACTIVE: Calculating 10x10 Grid | Center RGB: ${centerRGB.r},${centerRGB.g},${centerRGB.b}`);
+        // Debug Log
+        const debugNow = Date.now();
+        if (debugNow - lastLogTime.current > 500) {
+            if (latchedLock) {
+                console.log(`LOCKED ORIGIN. Projecting ${GRID_COUNT}x${GRID_COUNT} grid with cell size ${cellSize}px.`);
             }
-            lastLogTime.current = now;
+            lastLogTime.current = debugNow;
         }
     }
 
@@ -270,7 +220,14 @@ export default function PhotonInterface() {
     } else {
         if (requestRef.current) cancelAnimationFrame(requestRef.current);
     }
-  }, [isScanning]);
+  }, [isScanning, cellSize]); // Re-run if cellSize changes? Actually RAF loop uses state closure issue if not careful.
+  // BUT: `cellSize` is used inside `processFrame`.
+  // Since `processFrame` is defined inside the component, it captures `cellSize`.
+  // However, `requestAnimationFrame` recursion uses the *captured* `processFrame` closure.
+  // We need to use a ref for `cellSize` if we don't want to re-bind the loop constantly,
+  // OR just let the effect restart the loop when `cellSize` changes.
+  // The simplest reliable way in React hooks with RAF is to use a Ref for mutable values accessed in loop, OR let the dependency array handle restart.
+  // Restarting loop on `cellSize` change is fine.
 
 
   // --- RENDER ---
@@ -393,7 +350,7 @@ export default function PhotonInterface() {
             <div className="text-center space-y-2">
                 <h2 className="text-2xl font-semibold text-white tracking-tight">Optical Receiver</h2>
                 <p className="text-zinc-400 text-sm max-w-md">
-                    Align the 4 corner anchors with the camera grid to lock the data perimeter.
+                    Align the crosshair with the Top-Left Magenta Anchor. Use [+] and [-] to match grid size.
                 </p>
             </div>
 
@@ -441,91 +398,84 @@ export default function PhotonInterface() {
                 </div>
               )}
 
-              {/* Scanning Overlay (4 Probe Grid) */}
+              {/* Scanning Overlay (Single Anchor Projection) */}
               {isScanning && (
-                <div className="absolute inset-0 pointer-events-none">
-                    {/* Scanning Line */}
-                    <div className="absolute inset-0 bg-gradient-to-b from-transparent via-cyan-500/5 to-transparent animate-scan"></div>
-
-                    {/* TOP LEFT PROBE */}
-                    <div className="absolute top-[15%] left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
-                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.tl.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
+                <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                    {/* ORIGIN PROBE (Center of Screen) */}
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                         <div className={`w-full h-full border-2 transition-colors duration-200 ${isOriginLocked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
+                         {/* Crosshair */}
+                         <div className="absolute top-1/2 left-0 w-full h-[1px] bg-white/50"></div>
+                         <div className="absolute top-0 left-1/2 h-full w-[1px] bg-white/50"></div>
                     </div>
 
-                    {/* TOP RIGHT PROBE */}
-                    <div className="absolute top-[15%] left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
-                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.tr.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
-                    </div>
-
-                    {/* BOTTOM LEFT PROBE */}
-                    <div className="absolute top-[85%] left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
-                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.bl.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
-                    </div>
-
-                    {/* BOTTOM RIGHT PROBE */}
-                    <div className="absolute top-[85%] left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
-                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.br.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
-                    </div>
-
-                    {/* Full Lock Perimeter */}
-                    {probeData.fullLock && (
-                        <>
-                             {/* Perimeter Box (Thick Green Rectangle) */}
-                             <div
-                                className="absolute border-4 border-green-500 shadow-[0_0_20px_rgba(34,197,94,0.6)] animate-pulse"
-                                style={{
-                                    top: `${VERTICAL_GAP * 100}%`,
-                                    bottom: `${VERTICAL_GAP * 100}%`,
-                                    left: `${HORIZONTAL_GAP * 100}%`,
-                                    right: `${HORIZONTAL_GAP * 100}%`
-                                }}
-                             ></div>
-
-                             {/* Center Probe Indicator */}
-                             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-green-500/20 border border-green-400 flex items-center justify-center">
-                                 <div className="w-1 h-1 bg-green-400 rounded-full animate-ping"></div>
-                             </div>
-
-                             {/* Info Overlay */}
-                             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-8 text-[10px] font-mono font-bold text-center space-y-1">
-                                <div className="text-green-400 bg-black/80 px-2 py-1 rounded border border-green-500/30 whitespace-nowrap">
-                                    GRID MAPPED: {Math.round(probeData.cellWidth)}x{Math.round(probeData.cellHeight)}px
-                                </div>
-                                <div className="text-zinc-400 bg-black/60 px-2 py-1 rounded">
-                                    CTR: {probeData.center.r},{probeData.center.g},{probeData.center.b}
-                                </div>
-                             </div>
-                        </>
+                    {/* PROJECTED PORTAL */}
+                    {isOriginLocked && (
+                        <div
+                            className="absolute border-4 border-green-500/80 shadow-[0_0_20px_rgba(34,197,94,0.4)]"
+                            style={{
+                                top: '50%',
+                                left: '50%',
+                                width: `${cellSize * 9}px`,
+                                height: `${cellSize * 9}px`,
+                                transformOrigin: 'top left'
+                            }}
+                        >
+                            {/* Grid Hints (Corners) */}
+                            <div className="absolute top-0 right-0 w-2 h-2 bg-green-400"></div>
+                            <div className="absolute bottom-0 left-0 w-2 h-2 bg-green-400"></div>
+                            <div className="absolute bottom-0 right-0 w-2 h-2 bg-green-400"></div>
+                        </div>
                     )}
                 </div>
               )}
             </div>
 
+            {/* Manual Controls */}
             {isScanning && (
-              <div className="flex flex-col items-center gap-6 w-full max-w-xs">
-                {/* Zoom Slider */}
-                {zoomCapabilities && (
-                  <div className="w-full flex items-center gap-3 px-4 py-2 bg-zinc-900/80 rounded-full border border-zinc-800">
-                    <span className="text-xs text-zinc-500 font-mono">-</span>
-                    <input
-                      type="range"
-                      min={zoomCapabilities.min}
-                      max={zoomCapabilities.max}
-                      step={zoomCapabilities.step}
-                      value={zoomLevel}
-                      onChange={handleZoomChange}
-                      className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-                    />
-                    <span className="text-xs text-zinc-500 font-mono">+</span>
+              <div className="w-full flex flex-col gap-4 max-w-xs">
+                  {/* Cell Size Controls */}
+                  <div className="flex items-center justify-between bg-zinc-900/80 px-6 py-3 rounded-xl border border-zinc-800">
+                      <span className="text-xs font-mono text-zinc-400 uppercase">Grid Scale</span>
+                      <div className="flex items-center gap-4">
+                          <button
+                            onClick={() => handleCellSizeChange(-1)}
+                            className="w-8 h-8 flex items-center justify-center bg-zinc-800 rounded-lg hover:bg-zinc-700 active:bg-zinc-600 transition-colors text-white font-mono"
+                          >
+                              -
+                          </button>
+                          <span className="font-mono text-white min-w-[3ch] text-center">{cellSize}</span>
+                          <button
+                            onClick={() => handleCellSizeChange(1)}
+                            className="w-8 h-8 flex items-center justify-center bg-zinc-800 rounded-lg hover:bg-zinc-700 active:bg-zinc-600 transition-colors text-white font-mono"
+                          >
+                              +
+                          </button>
+                      </div>
                   </div>
-                )}
 
-                 <button
-                    onClick={stopCamera}
-                    className="px-6 py-2 text-zinc-500 hover:text-white transition-colors text-sm uppercase tracking-widest font-mono"
-                >
-                    Stop Feed
-                </button>
+                  {/* Zoom Slider (Conditional) */}
+                  {zoomCapabilities && (
+                    <div className="w-full flex items-center gap-3 px-4 py-2 bg-zinc-900/80 rounded-full border border-zinc-800">
+                        <span className="text-xs text-zinc-500 font-mono">ZOOM</span>
+                        <input
+                        type="range"
+                        min={zoomCapabilities.min}
+                        max={zoomCapabilities.max}
+                        step={zoomCapabilities.step}
+                        value={zoomLevel}
+                        onChange={handleZoomChange}
+                        className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                        />
+                    </div>
+                  )}
+
+                  <button
+                      onClick={stopCamera}
+                      className="px-6 py-2 text-zinc-500 hover:text-white transition-colors text-sm uppercase tracking-widest font-mono text-center"
+                  >
+                      Stop Feed
+                  </button>
               </div>
             )}
           </div>
