@@ -42,6 +42,8 @@ export default function PhotonInterface() {
   const CELL_SIZE = 30;
   const CANVAS_SIZE = COLS * CELL_SIZE;
   const PROBE_SIZE = 20;
+  const VERTICAL_GAP = 0.1; // 10% from top/bottom (was 15%) - Increased reach
+  const HORIZONTAL_GAP = 0.2; // 20% from left/right
 
   // --- TRANSMITTER LOGIC ---
   useEffect(() => {
@@ -185,15 +187,11 @@ export default function PhotonInterface() {
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Define 4 Anchor Probes (20% Side, 15% Top/Bottom)
-        // TL: 20% W, 15% H
-        // TR: 80% W, 15% H
-        // BL: 20% W, 85% H
-        // BR: 80% W, 85% H
-        const x1 = Math.floor(canvas.width * 0.2);
-        const x2 = Math.floor(canvas.width * 0.8);
-        const y1 = Math.floor(canvas.height * 0.15);
-        const y2 = Math.floor(canvas.height * 0.85);
+        // Define 4 Anchor Probes based on Constants
+        const x1 = Math.floor(canvas.width * HORIZONTAL_GAP);
+        const x2 = Math.floor(canvas.width * (1 - HORIZONTAL_GAP));
+        const y1 = Math.floor(canvas.height * VERTICAL_GAP);
+        const y2 = Math.floor(canvas.height * (1 - VERTICAL_GAP));
 
         // Sample 4 Anchors
         const tlRGB = getAverageRGB(ctx, x1, y1, PROBE_SIZE);
@@ -201,14 +199,23 @@ export default function PhotonInterface() {
         const blRGB = getAverageRGB(ctx, x1, y2, PROBE_SIZE);
         const brRGB = getAverageRGB(ctx, x2, y2, PROBE_SIZE);
 
-        // Handshake Logic: Magenta (R > 200, G < 100, B > 200)
-        // Relaxed threshold slightly for better real-world detection: R>180, G<120, B>180
+        // Handshake Logic: Magenta (R > 180, G < 120, B > 180)
         const checkLock = (rgb) => (rgb.r > 180 && rgb.g < 120 && rgb.b > 180);
 
-        const tlLocked = checkLock(tlRGB);
-        const trLocked = checkLock(trRGB);
-        const blLocked = checkLock(blRGB);
-        const brLocked = checkLock(brRGB);
+        const now = Date.now();
+        const LATCH_DURATION = 500; // ms
+
+        // Update Latches
+        if (checkLock(tlRGB)) lockLatches.current.tl = now;
+        if (checkLock(trRGB)) lockLatches.current.tr = now;
+        if (checkLock(blRGB)) lockLatches.current.bl = now;
+        if (checkLock(brRGB)) lockLatches.current.br = now;
+
+        // Check Latched Status
+        const tlLocked = (now - lockLatches.current.tl) < LATCH_DURATION;
+        const trLocked = (now - lockLatches.current.tr) < LATCH_DURATION;
+        const blLocked = (now - lockLatches.current.bl) < LATCH_DURATION;
+        const brLocked = (now - lockLatches.current.br) < LATCH_DURATION;
 
         const fullLock = tlLocked && trLocked && blLocked && brLocked;
 
@@ -221,23 +228,10 @@ export default function PhotonInterface() {
         }
 
         // Calculate Dimensions
-        // Width: average of top width and bottom width
-        const topWidth = x2 - x1;
-        const botWidth = x2 - x1; // They are geometrically same in pixel space here, but in real world perspective might differ?
-        // We are measuring pixel distance of our probes, so it's static unless we track blobs.
-        // Wait, the request says "Calculate Average Cell Width ... based on the distance between these 4 points".
-        // Since we are creating static probes, the distance IS static pixel distance.
-        // BUT, if we were tracking the dots, it would be dynamic.
-        // For this task, "Create four... Anchor Probes positioned in a square pattern... While fully mapped, calculate..."
-        // This implies we assume the user aligns the camera such that the image matches our probes.
-        // So the "distance" is just the distance between our probes.
-        // Which is (80% - 20%) * width = 60% of width.
         const gridWidth = x2 - x1;
         const gridHeight = y2 - y1;
 
-        // Grid is 10x10 cells.
-        // The anchors are at (0,0), (9,0), (0,9), (9,9).
-        // Distance covers 9 cells.
+        // Grid is 10x10 cells. Distance covers 9 intervals.
         const cellWidth = gridWidth / 9;
         const cellHeight = gridHeight / 9;
 
@@ -259,10 +253,9 @@ export default function PhotonInterface() {
             cellHeight
         });
 
-        const now = Date.now();
         if (now - lastLogTime.current > 333) {
             if (fullLock) {
-                console.log(`GRID FULLY MAPPED. Cell: ${Math.round(cellWidth)}x${Math.round(cellHeight)}px | Center RGB: ${centerRGB.r},${centerRGB.g},${centerRGB.b}`);
+                console.log(`PORTAL ACTIVE: Calculating 10x10 Grid | Center RGB: ${centerRGB.r},${centerRGB.g},${centerRGB.b}`);
             }
             lastLogTime.current = now;
         }
@@ -477,8 +470,16 @@ export default function PhotonInterface() {
                     {/* Full Lock Perimeter */}
                     {probeData.fullLock && (
                         <>
-                             {/* Perimeter Box */}
-                             <div className="absolute top-[15%] left-[20%] right-[20%] bottom-[15%] border border-green-400/50 shadow-[0_0_15px_rgba(74,222,128,0.2)]"></div>
+                             {/* Perimeter Box (Thick Green Rectangle) */}
+                             <div
+                                className="absolute border-4 border-green-500 shadow-[0_0_20px_rgba(34,197,94,0.6)] animate-pulse"
+                                style={{
+                                    top: `${VERTICAL_GAP * 100}%`,
+                                    bottom: `${VERTICAL_GAP * 100}%`,
+                                    left: `${HORIZONTAL_GAP * 100}%`,
+                                    right: `${HORIZONTAL_GAP * 100}%`
+                                }}
+                             ></div>
 
                              {/* Center Probe Indicator */}
                              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-green-500/20 border border-green-400 flex items-center justify-center">
