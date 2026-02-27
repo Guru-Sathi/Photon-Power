@@ -179,8 +179,8 @@ export default function PhotonInterface() {
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Define Anchor Probes (20% from Left, 20% from Right, Centered Vertically)
-        const centerY = Math.floor(canvas.height / 2);
+        // Define Anchor Probes (20% from Left, 20% from Right, 15% from Top)
+        const centerY = Math.floor(canvas.height * 0.15);
         const leftX = Math.floor(canvas.width * 0.2);
         const rightX = Math.floor(canvas.width * 0.8);
 
@@ -399,8 +399,8 @@ export default function PhotonInterface() {
                     {/* Scanning Line */}
                     <div className="absolute inset-0 bg-gradient-to-b from-transparent via-cyan-500/5 to-transparent animate-scan"></div>
 
-                    {/* LEFT PROBE (20% from Left) */}
-                    <div className="absolute top-1/2 left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                    {/* LEFT PROBE (20% from Left, 15% from Top) */}
+                    <div className="absolute top-[15%] left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
                          <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.left.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
                          {/* Text */}
                          <div className="absolute top-full mt-2 text-[9px] font-mono text-zinc-400 whitespace-nowrap bg-black/50 px-1 rounded">
@@ -408,8 +408,8 @@ export default function PhotonInterface() {
                          </div>
                     </div>
 
-                    {/* RIGHT PROBE (80% from Left) */}
-                    <div className="absolute top-1/2 left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                    {/* RIGHT PROBE (80% from Left, 15% from Top) */}
+                    <div className="absolute top-[15%] left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
                          <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.right.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
                          {/* Text */}
                          <div className="absolute top-full mt-2 text-[9px] font-mono text-zinc-400 whitespace-nowrap bg-black/50 px-1 rounded">
@@ -419,7 +419,7 @@ export default function PhotonInterface() {
 
                     {/* Full Lock Connector */}
                     {probeData.fullLock && (
-                         <div className="absolute top-1/2 left-[20%] right-[20%] h-[1px] bg-green-400/50 shadow-[0_0_8px_#4ade80]">
+                         <div className="absolute top-[15%] left-[20%] right-[20%] h-[1px] bg-green-400/50 shadow-[0_0_8px_#4ade80]">
                             <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-xs font-mono font-bold text-green-400 bg-black/80 px-2 py-0.5 rounded border border-green-500/30">
                                 WIDTH: {probeData.distance}px
                             </div>
