@@ -19,22 +19,23 @@ export default function PhotonInterface() {
   const [zoomLevel, setZoomLevel] = useState(1);
   const [zoomCapabilities, setZoomCapabilities] = useState(null);
 
-  // Single-Anchor Projection State
+  // Bounding Box Scanner State
   const processingCanvasRef = useRef(null);
-  const [cellSize, setCellSize] = useState(40); // User adjustable
-  const [isOriginLocked, setIsOriginLocked] = useState(false);
+  const [boundingBox, setBoundingBox] = useState(null);
+  const [isLocked, setIsLocked] = useState(false);
+  const [scaleWarning, setScaleWarning] = useState(false);
 
   const requestRef = useRef();
   const lastLogTime = useRef(0);
-  const lockLatch = useRef(0); // For single anchor latch
+  const lockLatch = useRef(0);
 
   // Constants
-  const COLS = 10;
-  const ROWS = 10;
-  const CELL_SIZE = 30; // For Transmitter rendering
+  const COLS = 14;
+  const ROWS = 14;
+  const CELL_SIZE = 25; // Smaller to fit
   const CANVAS_SIZE = COLS * CELL_SIZE;
   const PROBE_SIZE = 20;
-  const GRID_COUNT = 10;
+  const GRID_COUNT = 14;
 
   // --- TRANSMITTER LOGIC ---
   useEffect(() => {
@@ -63,30 +64,19 @@ export default function PhotonInterface() {
       const col = i % COLS;
       const row = Math.floor(i / COLS);
 
-      // 1. ANCHOR LOGIC (2x2 Corners)
-      // TL: (0,0), (0,1), (1,0), (1,1)
-      // TR: (10,0), (11,0), (10,1), (11,1) (Indices 10,11)
-      // BL: (0,10), (0,11), (1,10), (1,11)
-      // BR: (10,10), (11,10), (10,11), (11,11)
+      // 1. ANCHOR LOGIC (2x2 Corners of 14x14)
       const isTL = (col < 2 && row < 2);
-      const isTR = (col > 9 && row < 2);
-      const isBL = (col < 2 && row > 9);
-      const isBR = (col > 9 && row > 9);
+      const isTR = (col > 11 && row < 2);
+      const isBL = (col < 2 && row > 11);
+      const isBR = (col > 11 && row > 11);
 
       if (isTL || isTR || isBL || isBR) {
         colorCode = "101"; // Magenta
       }
-      // 2. QUIET ZONE LOGIC (1-cell buffer around anchors)
-      // TL Buffer: (col<3, row<3) AND not anchor
-      // TR Buffer: (col>8, row<3) AND not anchor
-      // BL Buffer: (col<3, row>8) AND not anchor
-      // BR Buffer: (col>8, row>8) AND not anchor
-      else if (
-          (col < 3 && row < 3) ||
-          (col > 8 && row < 3) ||
-          (col < 3 && row > 8) ||
-          (col > 8 && row > 8)
-      ) {
+      // 2. QUIET ZONE LOGIC
+      // Data core is central 10x10 -> col: 2..11, row: 2..11
+      // Everything else that is not an anchor is Quiet Zone (Black)
+      else if (col < 2 || col > 11 || row < 2 || row > 11) {
           colorCode = "000"; // Black Buffer
       }
       // 3. DATA LOGIC
@@ -120,21 +110,15 @@ export default function PhotonInterface() {
       }
     }
 
-    // 2nd Pass: Fill Data
+    // 2nd Pass: Fill Data (Central 10x10)
     let dataIndex = 0;
     for (let i = 0; i < totalCells; i++) {
         const col = i % COLS;
         const row = Math.floor(i / COLS);
 
-        // Skip Reserved Zones (Anchor + Buffer) -> (col < 3 or > 8) AND (row < 3 or > 8)
-        // Wait, (col < 3 && row < 3) is TL zone.
-        const isReserved =
-            (col < 3 && row < 3) ||
-            (col > 8 && row < 3) ||
-            (col < 3 && row > 8) ||
-            (col > 8 && row > 8);
+        const isDataCore = (col >= 2 && col <= 11 && row >= 2 && row <= 11);
 
-        if (!isReserved) {
+        if (isDataCore) {
             if (dataIndex < encodedChunks.length) {
                 const chunk = encodedChunks[dataIndex];
                 const color = COLORS[chunk] || "#000000";
@@ -226,25 +210,7 @@ export default function PhotonInterface() {
     };
   }, [cameraStream]);
 
-  // --- PIXEL PROBE LOGIC (SINGLE ANCHOR) ---
-  const getAverageRGB = (ctx, x, y, size) => {
-    const frameData = ctx.getImageData(x - size / 2, y - size / 2, size, size);
-    const data = frameData.data;
-    let r = 0, g = 0, b = 0;
-    const count = data.length / 4;
-
-    for (let i = 0; i < data.length; i += 4) {
-        r += data[i];
-        g += data[i + 1];
-        b += data[i + 2];
-    }
-    return {
-        r: Math.round(r / count),
-        g: Math.round(g / count),
-        b: Math.round(b / count)
-    };
-  };
-
+  // --- BOUNDING BOX SCANNER LOGIC ---
   const processFrame = () => {
     if (!videoRef.current || !processingCanvasRef.current || !isScanning) return;
 
@@ -255,34 +221,72 @@ export default function PhotonInterface() {
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
+
+        // Draw video frame to canvas
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Center of the screen is our "Origin Anchor" (Top-Left of Grid)
-        const originX = Math.floor(canvas.width / 2);
-        const originY = Math.floor(canvas.height / 2);
+        // Downsample slightly for performance (check every 4th pixel)
+        const step = 4;
+        const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = frameData.data;
 
-        // Sample Origin
-        const originRGB = getAverageRGB(ctx, originX, originY, PROBE_SIZE);
+        let minX = canvas.width, minY = canvas.height, maxX = 0, maxY = 0;
+        let foundMagenta = false;
 
-        // Handshake: Magenta (R>180, G<120, B>180)
-        const isLocked = (originRGB.r > 180 && originRGB.g < 120 && originRGB.b > 180);
+        // Bounding Box Scan
+        for (let y = 0; y < canvas.height; y += step) {
+            for (let x = 0; x < canvas.width; x += step) {
+                const i = (y * canvas.width + x) * 4;
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+
+                // Check for Magenta
+                if (r > 180 && g < 120 && b > 180) {
+                    foundMagenta = true;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
 
         const now = Date.now();
-        if (isLocked) {
-            lockLatch.current = now;
+
+        if (foundMagenta) {
+            // Check Scale Protection Margin
+            const margin = 10;
+            const isTooClose = (minX <= margin || maxX >= canvas.width - margin || minY <= margin || maxY >= canvas.height - margin);
+
+            // Only update latch if we have a valid box (not just a single pixel noise artifact, let's say width > 20px)
+            if (maxX - minX > 20 && maxY - minY > 20) {
+                 lockLatch.current = now;
+                 // Calculate CSS percentages for the overlay relative to canvas dimensions
+                 setBoundingBox({
+                     top: (minY / canvas.height) * 100,
+                     left: (minX / canvas.width) * 100,
+                     width: ((maxX - minX) / canvas.width) * 100,
+                     height: ((maxY - minY) / canvas.height) * 100,
+                     isTooClose
+                 });
+            }
         }
 
         // Latch logic (500ms)
         const latchedLock = (now - lockLatch.current) < 500;
-        setIsOriginLocked(latchedLock);
+        setIsLocked(latchedLock);
+
+        if (!latchedLock) {
+             setBoundingBox(null);
+        }
 
         // Debug Log
-        const debugNow = Date.now();
-        if (debugNow - lastLogTime.current > 500) {
-            if (latchedLock) {
-                console.log(`LOCKED ORIGIN. Projecting ${GRID_COUNT}x${GRID_COUNT} grid with cell size ${cellSize}px.`);
+        if (now - lastLogTime.current > 500) {
+            if (latchedLock && boundingBox) {
+                console.log(`LOCKED: Auto-Fit Box. Scale Protection: ${boundingBox.isTooClose ? 'WARNING' : 'OK'}`);
             }
-            lastLogTime.current = debugNow;
+            lastLogTime.current = now;
         }
     }
 
@@ -295,14 +299,7 @@ export default function PhotonInterface() {
     } else {
         if (requestRef.current) cancelAnimationFrame(requestRef.current);
     }
-  }, [isScanning, cellSize]); // Re-run if cellSize changes? Actually RAF loop uses state closure issue if not careful.
-  // BUT: `cellSize` is used inside `processFrame`.
-  // Since `processFrame` is defined inside the component, it captures `cellSize`.
-  // However, `requestAnimationFrame` recursion uses the *captured* `processFrame` closure.
-  // We need to use a ref for `cellSize` if we don't want to re-bind the loop constantly,
-  // OR just let the effect restart the loop when `cellSize` changes.
-  // The simplest reliable way in React hooks with RAF is to use a Ref for mutable values accessed in loop, OR let the dependency array handle restart.
-  // Restarting loop on `cellSize` change is fine.
+  }, [isScanning]);
 
 
   // --- RENDER ---
@@ -473,79 +470,53 @@ export default function PhotonInterface() {
                 </div>
               )}
 
-              {/* Scanning Overlay (Single Anchor Projection) */}
+              {/* Scanning Overlay (Auto-Fit Bounding Box) */}
               {isScanning && (
                 <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                    {/* ORIGIN PROBE (Center of Screen) */}
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
-                         <div className={`w-full h-full border-2 transition-colors duration-200 ${isOriginLocked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
-                         {/* Crosshair */}
-                         <div className="absolute top-1/2 left-0 w-full h-[1px] bg-white/50"></div>
-                         <div className="absolute top-0 left-1/2 h-full w-[1px] bg-white/50"></div>
-                    </div>
 
-                    {/* PROJECTED PORTAL */}
-                    {isOriginLocked && (
+                    {/* Scanning Line */}
+                    <div className="absolute inset-0 bg-gradient-to-b from-transparent via-cyan-500/5 to-transparent animate-scan"></div>
+
+                    {/* Auto-Fit Portal */}
+                    {isLocked && boundingBox && (
                         <div
-                            className="absolute border-4 border-green-500/80 shadow-[0_0_20px_rgba(34,197,94,0.4)]"
+                            className={`absolute border-4 transition-colors duration-200 ${
+                                boundingBox.isTooClose
+                                ? 'border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.6)] animate-pulse'
+                                : 'border-green-500 shadow-[0_0_20px_rgba(34,197,94,0.6)]'
+                            }`}
                             style={{
-                                top: '50%',
-                                left: '50%',
-                                width: `${cellSize * (GRID_COUNT - 1)}px`, // Spanning from center of TL to center of BR?
-                                // If anchors are at (0,0), (11,0), etc.
-                                // The distance is 11 cells.
-                                // Wait, the previous logic was 9 for 10x10.
-                                // Now 12x12. Distance is 11?
-                                // Let's try matching the grid visually.
-                                // If 12x12 grid, and we render cells of size X.
-                                // Total width is 12*X.
-                                // But "Origin" is the center of the TL anchor (which is 2x2).
-                                // This gets complicated.
-                                // Let's stick to simple projection:
-                                // "Top-Right = OriginX + (CELL_SIZE * 9)" was the prompt.
-                                // Now grid is 12x12.
-                                // Let's use `cellSize * 11` as a safe bet for 12 cells (0..11).
-                                height: `${cellSize * (GRID_COUNT - 1)}px`,
-                                transformOrigin: 'top left'
+                                top: `${boundingBox.top}%`,
+                                left: `${boundingBox.left}%`,
+                                width: `${boundingBox.width}%`,
+                                height: `${boundingBox.height}%`
                             }}
                         >
-                            {/* Grid Hints (Corners) */}
-                            <div className="absolute top-0 right-0 w-2 h-2 bg-green-400"></div>
-                            <div className="absolute bottom-0 left-0 w-2 h-2 bg-green-400"></div>
-                            <div className="absolute bottom-0 right-0 w-2 h-2 bg-green-400"></div>
+                            {/* Warning Text */}
+                            {boundingBox.isTooClose && (
+                                <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-red-500 text-white text-[10px] font-bold px-3 py-1 rounded-full whitespace-nowrap shadow-lg">
+                                    MOVE PHONE BACK
+                                </div>
+                            )}
 
-                            {/* Grid Overlay Hint */}
-                            <div className="absolute inset-0 bg-[linear-gradient(rgba(0,255,0,0.2)_1px,transparent_1px),linear-gradient(90deg,rgba(0,255,0,0.2)_1px,transparent_1px)]"
-                                style={{ backgroundSize: `${cellSize}px ${cellSize}px` }}
-                            ></div>
+                            {/* Inner Grid Hint (14x14) */}
+                            {!boundingBox.isTooClose && (
+                                <div className="absolute inset-0 opacity-20"
+                                     style={{
+                                         backgroundImage: `linear-gradient(rgba(0,255,0,0.5) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,0,0.5) 1px, transparent 1px)`,
+                                         backgroundSize: `${100/14}% ${100/14}%`
+                                     }}
+                                ></div>
+                            )}
                         </div>
                     )}
                 </div>
               )}
             </div>
 
-            {/* Manual Controls */}
+            {/* Controls */}
             {isScanning && (
               <div className="w-full flex flex-col gap-4 max-w-xs">
-                  {/* Cell Size Controls */}
-                  <div className="flex items-center justify-between bg-zinc-900/80 px-6 py-3 rounded-xl border border-zinc-800">
-                      <span className="text-xs font-mono text-zinc-400 uppercase">Grid Scale</span>
-                      <div className="flex items-center gap-4">
-                          <button
-                            onClick={() => handleCellSizeChange(-1)}
-                            className="w-8 h-8 flex items-center justify-center bg-zinc-800 rounded-lg hover:bg-zinc-700 active:bg-zinc-600 transition-colors text-white font-mono"
-                          >
-                              -
-                          </button>
-                          <span className="font-mono text-white min-w-[3ch] text-center">{cellSize}</span>
-                          <button
-                            onClick={() => handleCellSizeChange(1)}
-                            className="w-8 h-8 flex items-center justify-center bg-zinc-800 rounded-lg hover:bg-zinc-700 active:bg-zinc-600 transition-colors text-white font-mono"
-                          >
-                              +
-                          </button>
-                      </div>
-                  </div>
 
                   {/* Zoom Slider (Conditional) */}
                   {zoomCapabilities && (
