@@ -185,15 +185,15 @@ export default function PhotonInterface() {
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Define 4 Anchor Probes (20% margin)
-        // TL: 20% W, 20% H
-        // TR: 80% W, 20% H
-        // BL: 20% W, 80% H
-        // BR: 80% W, 80% H
+        // Define 4 Anchor Probes (20% Side, 15% Top/Bottom)
+        // TL: 20% W, 15% H
+        // TR: 80% W, 15% H
+        // BL: 20% W, 85% H
+        // BR: 80% W, 85% H
         const x1 = Math.floor(canvas.width * 0.2);
         const x2 = Math.floor(canvas.width * 0.8);
-        const y1 = Math.floor(canvas.height * 0.2);
-        const y2 = Math.floor(canvas.height * 0.8);
+        const y1 = Math.floor(canvas.height * 0.15);
+        const y2 = Math.floor(canvas.height * 0.85);
 
         // Sample 4 Anchors
         const tlRGB = getAverageRGB(ctx, x1, y1, PROBE_SIZE);
@@ -201,7 +201,9 @@ export default function PhotonInterface() {
         const blRGB = getAverageRGB(ctx, x1, y2, PROBE_SIZE);
         const brRGB = getAverageRGB(ctx, x2, y2, PROBE_SIZE);
 
-        const checkLock = (rgb) => (rgb.r > 200 && rgb.g < 100 && rgb.b > 200);
+        // Handshake Logic: Magenta (R > 200, G < 100, B > 200)
+        // Relaxed threshold slightly for better real-world detection: R>180, G<120, B>180
+        const checkLock = (rgb) => (rgb.r > 180 && rgb.g < 120 && rgb.b > 180);
 
         const tlLocked = checkLock(tlRGB);
         const trLocked = checkLock(trRGB);
@@ -209,6 +211,14 @@ export default function PhotonInterface() {
         const brLocked = checkLock(brRGB);
 
         const fullLock = tlLocked && trLocked && blLocked && brLocked;
+
+        // Debug individual probes if not locked
+        const debugNow = Date.now();
+        if (debugNow - lastLogTime.current > 1000) { // Log every second
+             if (!fullLock) {
+                 // console.log(`Probes: TL(${tlRGB.r},${tlRGB.g},${tlRGB.b}) TR(${trRGB.r},${trRGB.g},${trRGB.b}) BL(${blRGB.r},${blRGB.g},${blRGB.b}) BR(${brRGB.r},${brRGB.g},${brRGB.b})`);
+             }
+        }
 
         // Calculate Dimensions
         // Width: average of top width and bottom width
@@ -445,22 +455,22 @@ export default function PhotonInterface() {
                     <div className="absolute inset-0 bg-gradient-to-b from-transparent via-cyan-500/5 to-transparent animate-scan"></div>
 
                     {/* TOP LEFT PROBE */}
-                    <div className="absolute top-[20%] left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                    <div className="absolute top-[15%] left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
                          <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.tl.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
                     </div>
 
                     {/* TOP RIGHT PROBE */}
-                    <div className="absolute top-[20%] left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                    <div className="absolute top-[15%] left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
                          <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.tr.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
                     </div>
 
                     {/* BOTTOM LEFT PROBE */}
-                    <div className="absolute top-[80%] left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                    <div className="absolute top-[85%] left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
                          <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.bl.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
                     </div>
 
                     {/* BOTTOM RIGHT PROBE */}
-                    <div className="absolute top-[80%] left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                    <div className="absolute top-[85%] left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
                          <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.br.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
                     </div>
 
@@ -468,7 +478,7 @@ export default function PhotonInterface() {
                     {probeData.fullLock && (
                         <>
                              {/* Perimeter Box */}
-                             <div className="absolute top-[20%] left-[20%] right-[20%] bottom-[20%] border border-green-400/50 shadow-[0_0_15px_rgba(74,222,128,0.2)]"></div>
+                             <div className="absolute top-[15%] left-[20%] right-[20%] bottom-[15%] border border-green-400/50 shadow-[0_0_15px_rgba(74,222,128,0.2)]"></div>
 
                              {/* Center Probe Indicator */}
                              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-green-500/20 border border-green-400 flex items-center justify-center">
