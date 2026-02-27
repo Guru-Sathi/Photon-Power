@@ -22,10 +22,16 @@ export default function PhotonInterface() {
   // Probe State
   const processingCanvasRef = useRef(null);
   const [probeData, setProbeData] = useState({
-      left: { r: 0, g: 0, b: 0, locked: false },
-      right: { r: 0, g: 0, b: 0, locked: false },
+      tl: { r: 0, g: 0, b: 0, locked: false }, // Top-Left
+      tr: { r: 0, g: 0, b: 0, locked: false }, // Top-Right
+      bl: { r: 0, g: 0, b: 0, locked: false }, // Bottom-Left
+      br: { r: 0, g: 0, b: 0, locked: false }, // Bottom-Right
+      center: { r: 0, g: 0, b: 0 }, // Center Data Probe
       fullLock: false,
-      distance: 0
+      gridWidth: 0,
+      gridHeight: 0,
+      cellWidth: 0,
+      cellHeight: 0
   });
   const requestRef = useRef();
   const lastLogTime = useRef(0);
@@ -179,35 +185,74 @@ export default function PhotonInterface() {
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Define Anchor Probes (20% from Left, 20% from Right, 15% from Top)
-        const centerY = Math.floor(canvas.height * 0.15);
-        const leftX = Math.floor(canvas.width * 0.2);
-        const rightX = Math.floor(canvas.width * 0.8);
+        // Define 4 Anchor Probes (20% margin)
+        // TL: 20% W, 20% H
+        // TR: 80% W, 20% H
+        // BL: 20% W, 80% H
+        // BR: 80% W, 80% H
+        const x1 = Math.floor(canvas.width * 0.2);
+        const x2 = Math.floor(canvas.width * 0.8);
+        const y1 = Math.floor(canvas.height * 0.2);
+        const y2 = Math.floor(canvas.height * 0.8);
 
-        // Sample Left Probe
-        const leftRGB = getAverageRGB(ctx, leftX, centerY, PROBE_SIZE);
-        const leftLocked = (leftRGB.r > 200 && leftRGB.g < 100 && leftRGB.b > 200);
+        // Sample 4 Anchors
+        const tlRGB = getAverageRGB(ctx, x1, y1, PROBE_SIZE);
+        const trRGB = getAverageRGB(ctx, x2, y1, PROBE_SIZE);
+        const blRGB = getAverageRGB(ctx, x1, y2, PROBE_SIZE);
+        const brRGB = getAverageRGB(ctx, x2, y2, PROBE_SIZE);
 
-        // Sample Right Probe
-        const rightRGB = getAverageRGB(ctx, rightX, centerY, PROBE_SIZE);
-        const rightLocked = (rightRGB.r > 200 && rightRGB.g < 100 && rightRGB.b > 200);
+        const checkLock = (rgb) => (rgb.r > 200 && rgb.g < 100 && rgb.b > 200);
 
-        const fullLock = leftLocked && rightLocked;
-        const distance = rightX - leftX; // Simple horizontal distance for now
+        const tlLocked = checkLock(tlRGB);
+        const trLocked = checkLock(trRGB);
+        const blLocked = checkLock(blRGB);
+        const brLocked = checkLock(brRGB);
+
+        const fullLock = tlLocked && trLocked && blLocked && brLocked;
+
+        // Calculate Dimensions
+        // Width: average of top width and bottom width
+        const topWidth = x2 - x1;
+        const botWidth = x2 - x1; // They are geometrically same in pixel space here, but in real world perspective might differ?
+        // We are measuring pixel distance of our probes, so it's static unless we track blobs.
+        // Wait, the request says "Calculate Average Cell Width ... based on the distance between these 4 points".
+        // Since we are creating static probes, the distance IS static pixel distance.
+        // BUT, if we were tracking the dots, it would be dynamic.
+        // For this task, "Create four... Anchor Probes positioned in a square pattern... While fully mapped, calculate..."
+        // This implies we assume the user aligns the camera such that the image matches our probes.
+        // So the "distance" is just the distance between our probes.
+        // Which is (80% - 20%) * width = 60% of width.
+        const gridWidth = x2 - x1;
+        const gridHeight = y2 - y1;
+
+        // Grid is 10x10 cells.
+        // The anchors are at (0,0), (9,0), (0,9), (9,9).
+        // Distance covers 9 cells.
+        const cellWidth = gridWidth / 9;
+        const cellHeight = gridHeight / 9;
+
+        // Center Data Probe
+        const centerX = Math.floor(canvas.width / 2);
+        const centerY = Math.floor(canvas.height / 2);
+        const centerRGB = getAverageRGB(ctx, centerX, centerY, PROBE_SIZE);
 
         setProbeData({
-            left: { ...leftRGB, locked: leftLocked },
-            right: { ...rightRGB, locked: rightLocked },
+            tl: { ...tlRGB, locked: tlLocked },
+            tr: { ...trRGB, locked: trLocked },
+            bl: { ...blRGB, locked: blLocked },
+            br: { ...brRGB, locked: brLocked },
+            center: centerRGB,
             fullLock,
-            distance
+            gridWidth,
+            gridHeight,
+            cellWidth,
+            cellHeight
         });
 
         const now = Date.now();
         if (now - lastLogTime.current > 333) {
             if (fullLock) {
-                console.log(`FULL WIDTH LOCKED: ${distance}px`);
-            } else {
-                 // console.log(`L: ${leftLocked} R: ${rightLocked}`);
+                console.log(`GRID FULLY MAPPED. Cell: ${Math.round(cellWidth)}x${Math.round(cellHeight)}px | Center RGB: ${centerRGB.r},${centerRGB.g},${centerRGB.b}`);
             }
             lastLogTime.current = now;
         }
@@ -345,7 +390,7 @@ export default function PhotonInterface() {
             <div className="text-center space-y-2">
                 <h2 className="text-2xl font-semibold text-white tracking-tight">Optical Receiver</h2>
                 <p className="text-zinc-400 text-sm max-w-md">
-                    Align the two search zones with the Left and Right Magenta Anchors.
+                    Align the 4 corner anchors with the camera grid to lock the data perimeter.
                 </p>
             </div>
 
@@ -393,37 +438,53 @@ export default function PhotonInterface() {
                 </div>
               )}
 
-              {/* Scanning Overlay (Double Probe) */}
+              {/* Scanning Overlay (4 Probe Grid) */}
               {isScanning && (
                 <div className="absolute inset-0 pointer-events-none">
                     {/* Scanning Line */}
                     <div className="absolute inset-0 bg-gradient-to-b from-transparent via-cyan-500/5 to-transparent animate-scan"></div>
 
-                    {/* LEFT PROBE (20% from Left, 15% from Top) */}
-                    <div className="absolute top-[15%] left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
-                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.left.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
-                         {/* Text */}
-                         <div className="absolute top-full mt-2 text-[9px] font-mono text-zinc-400 whitespace-nowrap bg-black/50 px-1 rounded">
-                             {probeData.left.locked ? <span className="text-green-400">LOCKED</span> : "SEARCHING"}
-                         </div>
+                    {/* TOP LEFT PROBE */}
+                    <div className="absolute top-[20%] left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.tl.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
                     </div>
 
-                    {/* RIGHT PROBE (80% from Left, 15% from Top) */}
-                    <div className="absolute top-[15%] left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
-                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.right.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
-                         {/* Text */}
-                         <div className="absolute top-full mt-2 text-[9px] font-mono text-zinc-400 whitespace-nowrap bg-black/50 px-1 rounded">
-                             {probeData.right.locked ? <span className="text-green-400">LOCKED</span> : "SEARCHING"}
-                         </div>
+                    {/* TOP RIGHT PROBE */}
+                    <div className="absolute top-[20%] left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.tr.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
                     </div>
 
-                    {/* Full Lock Connector */}
+                    {/* BOTTOM LEFT PROBE */}
+                    <div className="absolute top-[80%] left-[20%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.bl.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
+                    </div>
+
+                    {/* BOTTOM RIGHT PROBE */}
+                    <div className="absolute top-[80%] left-[80%] -translate-x-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center">
+                         <div className={`w-full h-full border-2 transition-colors duration-200 ${probeData.br.locked ? 'border-green-400 shadow-[0_0_10px_#4ade80]' : 'border-white/30'}`}></div>
+                    </div>
+
+                    {/* Full Lock Perimeter */}
                     {probeData.fullLock && (
-                         <div className="absolute top-[15%] left-[20%] right-[20%] h-[1px] bg-green-400/50 shadow-[0_0_8px_#4ade80]">
-                            <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-xs font-mono font-bold text-green-400 bg-black/80 px-2 py-0.5 rounded border border-green-500/30">
-                                WIDTH: {probeData.distance}px
-                            </div>
-                         </div>
+                        <>
+                             {/* Perimeter Box */}
+                             <div className="absolute top-[20%] left-[20%] right-[20%] bottom-[20%] border border-green-400/50 shadow-[0_0_15px_rgba(74,222,128,0.2)]"></div>
+
+                             {/* Center Probe Indicator */}
+                             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-green-500/20 border border-green-400 flex items-center justify-center">
+                                 <div className="w-1 h-1 bg-green-400 rounded-full animate-ping"></div>
+                             </div>
+
+                             {/* Info Overlay */}
+                             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-8 text-[10px] font-mono font-bold text-center space-y-1">
+                                <div className="text-green-400 bg-black/80 px-2 py-1 rounded border border-green-500/30 whitespace-nowrap">
+                                    GRID MAPPED: {Math.round(probeData.cellWidth)}x{Math.round(probeData.cellHeight)}px
+                                </div>
+                                <div className="text-zinc-400 bg-black/60 px-2 py-1 rounded">
+                                    CTR: {probeData.center.r},{probeData.center.g},{probeData.center.b}
+                                </div>
+                             </div>
+                        </>
                     )}
                 </div>
               )}
