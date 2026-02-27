@@ -59,6 +59,16 @@ export default function Transmitter() {
     }
   }, [encodedChunks]);
 
+  const videoRef = useRef(null);
+
+  const startCamera = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" }, // Forces the back camera
+      audio: false
+    });
+    videoRef.current.srcObject = stream;
+  };
+
   return (
     <div className="bg-zinc-900/40 border border-zinc-800/50 rounded-3xl p-8 backdrop-blur-2xl shadow-2xl w-full max-w-5xl mx-auto flex flex-col md:flex-row gap-12 items-center justify-between">
 
@@ -136,6 +146,15 @@ export default function Transmitter() {
                         style={{ width: `${Math.min((encodedChunks.length / 94) * 100, 100)}%` }}
                     ></div>
                 </div>
+            </div>
+            <div>
+              <button onClick={startCamera}>Are you the receiver?</button>
+              <div>
+                <video ref={videoRef} autoPlay 
+                  muted 
+                  playsInline 
+                  className="w-full h-auto"></video>
+              </div>
             </div>
         </div>
       </div>
