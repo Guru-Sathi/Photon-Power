@@ -60,24 +60,99 @@ export default function PhotonInterface() {
 
     for (let i = 0; i < totalCells; i++) {
       let colorCode;
-      if (i === 0 || i === 9 || i === 90 || i === 99) {
-        colorCode = "101"; // Magenta Anchors
-      } else if (i === 1) {
-        colorCode = "000"; // Clock
-      } else {
-          const chunkIndex = i - 2;
-          if (chunkIndex >= 0 && chunkIndex < encodedChunks.length) {
-               colorCode = encodedChunks[chunkIndex];
-          } else {
-              colorCode = "000";
-          }
+      const col = i % COLS;
+      const row = Math.floor(i / COLS);
+
+      // 1. ANCHOR LOGIC (2x2 Corners)
+      // TL: (0,0), (0,1), (1,0), (1,1)
+      // TR: (10,0), (11,0), (10,1), (11,1) (Indices 10,11)
+      // BL: (0,10), (0,11), (1,10), (1,11)
+      // BR: (10,10), (11,10), (10,11), (11,11)
+      const isTL = (col < 2 && row < 2);
+      const isTR = (col > 9 && row < 2);
+      const isBL = (col < 2 && row > 9);
+      const isBR = (col > 9 && row > 9);
+
+      if (isTL || isTR || isBL || isBR) {
+        colorCode = "101"; // Magenta
       }
-      const color = COLORS[colorCode] || "#000000";
-      const x = (i % COLS) * CELL_SIZE;
-      const y = Math.floor(i / COLS) * CELL_SIZE;
-      ctx.fillStyle = color;
-      ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+      // 2. QUIET ZONE LOGIC (1-cell buffer around anchors)
+      // TL Buffer: (col<3, row<3) AND not anchor
+      // TR Buffer: (col>8, row<3) AND not anchor
+      // BL Buffer: (col<3, row>8) AND not anchor
+      // BR Buffer: (col>8, row>8) AND not anchor
+      else if (
+          (col < 3 && row < 3) ||
+          (col > 8 && row < 3) ||
+          (col < 3 && row > 8) ||
+          (col > 8 && row > 8)
+      ) {
+          colorCode = "000"; // Black Buffer
+      }
+      // 3. DATA LOGIC
+      // Map linear index to available cells.
+      // We iterate row by row. If a cell is NOT reserved, it takes the next chunk.
+      // However, calculating "nth available cell" in a loop is expensive if we do it every frame.
+      // Instead, let's just pre-calculate if a cell is data capable.
+      // For this simple loop, we can just maintain a counter outside?
+      // No, React's `useEffect` runs once per render.
+      // Better: Just check if it's a data cell, then map to chunk index.
+      // But we need a continuous index.
+      // Let's do a 2-pass or just logic.
+      // Since `i` is linear 0..143.
+      // We can't easily know "this is the 5th data cell" without counting previous data cells.
+      else {
+          // It's a data cell.
+          // We need to know which chunk index maps here.
+          // Let's count how many valid data cells existed before index `i`.
+          // This is inefficient O(N^2) if done inside loop for every cell.
+          // Better approach: Generate a map of valid indices first.
+          colorCode = "000"; // Placeholder, handled in logic below
+      }
+
+      // Temporary fill for non-data logic parts
+      if (colorCode !== "000" && colorCode !== undefined) {
+          const color = COLORS[colorCode] || "#000000";
+          const x = col * CELL_SIZE;
+          const y = row * CELL_SIZE;
+          ctx.fillStyle = color;
+          ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+      }
     }
+
+    // 2nd Pass: Fill Data
+    let dataIndex = 0;
+    for (let i = 0; i < totalCells; i++) {
+        const col = i % COLS;
+        const row = Math.floor(i / COLS);
+
+        // Skip Reserved Zones (Anchor + Buffer) -> (col < 3 or > 8) AND (row < 3 or > 8)
+        // Wait, (col < 3 && row < 3) is TL zone.
+        const isReserved =
+            (col < 3 && row < 3) ||
+            (col > 8 && row < 3) ||
+            (col < 3 && row > 8) ||
+            (col > 8 && row > 8);
+
+        if (!isReserved) {
+            if (dataIndex < encodedChunks.length) {
+                const chunk = encodedChunks[dataIndex];
+                const color = COLORS[chunk] || "#000000";
+                const x = col * CELL_SIZE;
+                const y = row * CELL_SIZE;
+                ctx.fillStyle = color;
+                ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+            } else {
+                // Out of data, fill black
+                const x = col * CELL_SIZE;
+                const y = row * CELL_SIZE;
+                ctx.fillStyle = "#000000";
+                ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+            }
+            dataIndex++;
+        }
+    }
+
   }, [encodedChunks, mode]);
 
   // --- RECEIVER LOGIC ---
@@ -416,8 +491,21 @@ export default function PhotonInterface() {
                             style={{
                                 top: '50%',
                                 left: '50%',
-                                width: `${cellSize * 9}px`,
-                                height: `${cellSize * 9}px`,
+                                width: `${cellSize * (GRID_COUNT - 1)}px`, // Spanning from center of TL to center of BR?
+                                // If anchors are at (0,0), (11,0), etc.
+                                // The distance is 11 cells.
+                                // Wait, the previous logic was 9 for 10x10.
+                                // Now 12x12. Distance is 11?
+                                // Let's try matching the grid visually.
+                                // If 12x12 grid, and we render cells of size X.
+                                // Total width is 12*X.
+                                // But "Origin" is the center of the TL anchor (which is 2x2).
+                                // This gets complicated.
+                                // Let's stick to simple projection:
+                                // "Top-Right = OriginX + (CELL_SIZE * 9)" was the prompt.
+                                // Now grid is 12x12.
+                                // Let's use `cellSize * 11` as a safe bet for 12 cells (0..11).
+                                height: `${cellSize * (GRID_COUNT - 1)}px`,
                                 transformOrigin: 'top left'
                             }}
                         >
@@ -425,6 +513,11 @@ export default function PhotonInterface() {
                             <div className="absolute top-0 right-0 w-2 h-2 bg-green-400"></div>
                             <div className="absolute bottom-0 left-0 w-2 h-2 bg-green-400"></div>
                             <div className="absolute bottom-0 right-0 w-2 h-2 bg-green-400"></div>
+
+                            {/* Grid Overlay Hint */}
+                            <div className="absolute inset-0 bg-[linear-gradient(rgba(0,255,0,0.2)_1px,transparent_1px),linear-gradient(90deg,rgba(0,255,0,0.2)_1px,transparent_1px)]"
+                                style={{ backgroundSize: `${cellSize}px ${cellSize}px` }}
+                            ></div>
                         </div>
                     )}
                 </div>
