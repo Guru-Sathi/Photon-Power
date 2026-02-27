@@ -19,16 +19,14 @@ export default function PhotonInterface() {
   const [zoomLevel, setZoomLevel] = useState(1);
   const [zoomCapabilities, setZoomCapabilities] = useState(null);
 
-  // Bounding Box Scanner State
+  // Perspective Scanner State
   const processingCanvasRef = useRef(null);
-  const [boundingBox, setBoundingBox] = useState(null);
+  const displayCanvasRef = useRef(null); // Overlay for drawing quad and dots
   const [isLocked, setIsLocked] = useState(false);
-  const [scaleWarning, setScaleWarning] = useState(false);
   const [decodedMessage, setDecodedMessage] = useState("");
 
   const requestRef = useRef();
   const lastLogTime = useRef(0);
-  const lockLatch = useRef(0);
 
   // Constants
   const COLS = 14;
@@ -211,30 +209,35 @@ export default function PhotonInterface() {
     };
   }, [cameraStream]);
 
-  // --- BOUNDING BOX SCANNER LOGIC ---
+  // --- PERSPECTIVE SCANNER LOGIC ---
   const processFrame = () => {
-    if (!videoRef.current || !processingCanvasRef.current || !isScanning) return;
+    if (!videoRef.current || !processingCanvasRef.current || !displayCanvasRef.current || !isScanning) return;
 
     const video = videoRef.current;
     const canvas = processingCanvasRef.current;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
+    const displayCanvas = displayCanvasRef.current;
+    const displayCtx = displayCanvas.getContext('2d');
+
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
+        displayCanvas.width = video.videoWidth;
+        displayCanvas.height = video.videoHeight;
 
-        // Draw video frame to canvas
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        displayCtx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
 
-        // Downsample slightly for performance (check every 4th pixel)
         const step = 4;
         const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = frameData.data;
 
-        let minX = canvas.width, minY = canvas.height, maxX = 0, maxY = 0;
-        let foundMagenta = false;
+        // Find 4 extreme points
+        let tl = null, tr = null, bl = null, br = null;
+        let minSum = Infinity, maxSum = -Infinity, minDiff = Infinity, maxDiff = -Infinity;
+        let magentaCount = 0;
 
-        // Bounding Box Scan
         for (let y = 0; y < canvas.height; y += step) {
             for (let x = 0; x < canvas.width; x += step) {
                 const i = (y * canvas.width + x) * 4;
@@ -242,92 +245,106 @@ export default function PhotonInterface() {
                 const g = data[i + 1];
                 const b = data[i + 2];
 
-                // Check for Magenta
-                if (r > 180 && g < 120 && b > 180) {
-                    foundMagenta = true;
-                    if (x < minX) minX = x;
-                    if (x > maxX) maxX = x;
-                    if (y < minY) minY = y;
-                    if (y > maxY) maxY = y;
+                // High Confidence Magenta (R>220, G<80, B>220)
+                if (r > 220 && g < 80 && b > 220) {
+                    magentaCount++;
+                    const sum = x + y;
+                    const diff = x - y;
+
+                    if (sum < minSum) { minSum = sum; tl = {x, y}; }
+                    if (sum > maxSum) { maxSum = sum; br = {x, y}; }
+                    if (diff > maxDiff) { maxDiff = diff; tr = {x, y}; }
+                    if (diff < minDiff) { minDiff = diff; bl = {x, y}; }
                 }
             }
         }
 
         const now = Date.now();
 
-        if (foundMagenta) {
-            // Check Scale Protection Margin
-            const margin = 10;
-            const isTooClose = (minX <= margin || maxX >= canvas.width - margin || minY <= margin || maxY >= canvas.height - margin);
+        if (magentaCount > 20 && tl && tr && bl && br) {
+            // Check if quadrilateral is "tiny"
+            const diagonalSq = Math.pow(br.x - tl.x, 2) + Math.pow(br.y - tl.y, 2);
+            if (diagonalSq < 2500) { // roughly 50px diagonal
+                setIsLocked(false);
+                if (now - lastLogTime.current > 1000) {
+                    console.log('Searching for Anchors... (Box too tiny)');
+                    lastLogTime.current = now;
+                }
+            } else {
+                setIsLocked(true);
 
-            // Only update latch if we have a valid box (not just a single pixel noise artifact, let's say width > 20px)
-            if (maxX - minX > 20 && maxY - minY > 20) {
-                 lockLatch.current = now;
-                 // Calculate CSS percentages for the overlay relative to canvas dimensions
-                 setBoundingBox({
-                     top: (minY / canvas.height) * 100,
-                     left: (minX / canvas.width) * 100,
-                     width: ((maxX - minX) / canvas.width) * 100,
-                     height: ((maxY - minY) / canvas.height) * 100,
-                     isTooClose
-                 });
-            }
-        }
+                // Draw Quadrilateral Outline
+                displayCtx.strokeStyle = '#4ade80'; // Green
+                displayCtx.lineWidth = 3;
+                displayCtx.beginPath();
+                displayCtx.moveTo(tl.x, tl.y);
+                displayCtx.lineTo(tr.x, tr.y);
+                displayCtx.lineTo(br.x, br.y);
+                displayCtx.lineTo(bl.x, bl.y);
+                displayCtx.closePath();
+                displayCtx.stroke();
 
-        // Latch logic (500ms)
-        const latchedLock = (now - lockLatch.current) < 500;
-        setIsLocked(latchedLock);
+                // Bilinear Interpolation for 10x10 Grid (indices 2 to 11 of 14x14)
+                displayCtx.fillStyle = '#ffffff'; // White dots
+                let bitstream = "";
+                let debugBits = "";
 
-        if (!latchedLock) {
-             setBoundingBox(null);
-        }
+                for (let row = 2; row < 12; row++) {
+                    for (let col = 2; col < 12; col++) {
+                        const u = (col + 0.5) / 14;
+                        const v = (row + 0.5) / 14;
 
-        // --- DECODING LOGIC ---
-        if (latchedLock && !isTooClose) {
-            // The bounding box represents the full 14x14 grid
-            const boxW = maxX - minX;
-            const boxH = maxY - minY;
-            const cellW = boxW / 14;
-            const cellH = boxH / 14;
+                        // P(u,v) = (1-u)(1-v)TL + u(1-v)TR + (1-u)vBL + uvBR
+                        const x = Math.floor(
+                            (1-u)*(1-v)*tl.x + u*(1-v)*tr.x + (1-u)*v*bl.x + u*v*br.x
+                        );
+                        const y = Math.floor(
+                            (1-u)*(1-v)*tl.y + u*(1-v)*tr.y + (1-u)*v*bl.y + u*v*br.y
+                        );
 
-            let bitstream = "";
+                        // Draw White Dot
+                        displayCtx.beginPath();
+                        displayCtx.arc(x, y, 2, 0, 2 * Math.PI);
+                        displayCtx.fill();
 
-            // Sample the 10x10 data core (rows 2-11, cols 2-11)
-            for (let r = 2; r < 12; r++) {
-                for (let c = 2; c < 12; c++) {
-                    // Center of the cell
-                    const cx = Math.floor(minX + (c + 0.5) * cellW);
-                    const cy = Math.floor(minY + (r + 0.5) * cellH);
+                        // Sample RGB
+                        if (x >= 0 && x < canvas.width && y >= 0 && y < canvas.height) {
+                            const i = (y * canvas.width + x) * 4;
+                            const r = data[i];
+                            const g = data[i + 1];
+                            const b = data[i + 2];
 
-                    // Make sure we don't go out of bounds
-                    if (cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
-                        const i = (cy * canvas.width + cx) * 4;
-                        const red = data[i];
-                        const green = data[i + 1];
-                        const blue = data[i + 2];
+                            // "If center pixel is White (R,G,B > 200), log '1'... Black log '0'"
+                            // For actual decoding we still use getColorBits
+                            const isWhite = (r > 200 && g > 200 && b > 200);
+                            debugBits += isWhite ? '1' : '0';
 
-                        const bits = getColorBits(red, green, blue);
-                        bitstream += bits;
-                    } else {
-                        bitstream += "000"; // fallback
+                            const bits = getColorBits(r, g, b);
+                            bitstream += bits;
+                        } else {
+                            bitstream += "000";
+                            debugBits += '0';
+                        }
                     }
                 }
-            }
 
-            const text = binaryToASCII(bitstream);
+                // Log Human Readable Test
+                if (now - lastLogTime.current > 500) {
+                    console.log(`Grid Bits: ${debugBits.substring(0, 30)}...`); // snippet
+                    lastLogTime.current = now;
+                }
 
-            // Filter noise by only updating if different and has some length
-            if (text !== decodedMessage) {
-                setDecodedMessage(text);
+                const text = binaryToASCII(bitstream);
+                if (text !== decodedMessage) {
+                    setDecodedMessage(text);
+                }
             }
-        }
-
-        // Debug Log
-        if (now - lastLogTime.current > 500) {
-            if (latchedLock && boundingBox) {
-                console.log(`LOCKED: Auto-Fit Box. Scale Protection: ${boundingBox.isTooClose ? 'WARNING' : 'OK'}`);
+        } else {
+            setIsLocked(false);
+            if (now - lastLogTime.current > 1000) {
+                console.log('Searching for Anchors...');
+                lastLogTime.current = now;
             }
-            lastLogTime.current = now;
         }
     }
 
@@ -477,8 +494,12 @@ export default function PhotonInterface() {
                 className={`w-full h-full object-cover transition-opacity duration-500 ${isScanning ? 'opacity-100' : 'opacity-0'}`}
               />
 
-              {/* Hidden Processing Canvas */}
+              {/* Hidden Processing Canvas & Visible Display Canvas */}
               <canvas ref={processingCanvasRef} className="hidden" />
+              <canvas
+                ref={displayCanvasRef}
+                className={`absolute inset-0 w-full h-full pointer-events-none transition-opacity duration-500 ${isScanning ? 'opacity-100' : 'opacity-0'}`}
+              />
 
               {/* Not Scanning State */}
               {!isScanning && !cameraError && (
@@ -511,47 +532,11 @@ export default function PhotonInterface() {
                 </div>
               )}
 
-              {/* Scanning Overlay (Auto-Fit Bounding Box) */}
+              {/* Scanning Line */}
               {isScanning && (
-                <div className="absolute inset-0 pointer-events-none overflow-hidden">
-
-                    {/* Scanning Line */}
-                    <div className="absolute inset-0 bg-gradient-to-b from-transparent via-cyan-500/5 to-transparent animate-scan"></div>
-
-                    {/* Auto-Fit Portal */}
-                    {isLocked && boundingBox && (
-                        <div
-                            className={`absolute border-4 transition-colors duration-200 ${
-                                boundingBox.isTooClose
-                                ? 'border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.6)] animate-pulse'
-                                : 'border-green-500 shadow-[0_0_20px_rgba(34,197,94,0.6)]'
-                            }`}
-                            style={{
-                                top: `${boundingBox.top}%`,
-                                left: `${boundingBox.left}%`,
-                                width: `${boundingBox.width}%`,
-                                height: `${boundingBox.height}%`
-                            }}
-                        >
-                            {/* Warning Text */}
-                            {boundingBox.isTooClose && (
-                                <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-red-500 text-white text-[10px] font-bold px-3 py-1 rounded-full whitespace-nowrap shadow-lg">
-                                    MOVE PHONE BACK
-                                </div>
-                            )}
-
-                            {/* Inner Grid Hint (14x14) */}
-                            {!boundingBox.isTooClose && (
-                                <div className="absolute inset-0 opacity-20"
-                                     style={{
-                                         backgroundImage: `linear-gradient(rgba(0,255,0,0.5) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,0,0.5) 1px, transparent 1px)`,
-                                         backgroundSize: `${100/14}% ${100/14}%`
-                                     }}
-                                ></div>
-                            )}
-                        </div>
-                    )}
-                </div>
+                  <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                      <div className="absolute inset-0 bg-gradient-to-b from-transparent via-cyan-500/5 to-transparent animate-scan"></div>
+                  </div>
               )}
             </div>
 
@@ -562,7 +547,7 @@ export default function PhotonInterface() {
                   <div className="w-full bg-zinc-950/80 border border-zinc-800 rounded-xl p-4 min-h-[100px] flex flex-col">
                       <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest mb-2 flex justify-between">
                           <span>Decoded Message</span>
-                          {isLocked && !boundingBox?.isTooClose && <span className="text-green-500 animate-pulse">Receiving...</span>}
+                          {isLocked && <span className="text-green-500 animate-pulse">Receiving...</span>}
                       </span>
                       <p className="text-white font-mono text-sm break-all leading-relaxed flex-1">
                           {decodedMessage || <span className="text-zinc-700">Waiting for lock...</span>}
