@@ -1,36 +1,44 @@
 import { create } from 'zustand';
 
-// We implement a robust, initial setup for our global state management using Zustand.
-// Following SOLID principles, we keep the store modular by separating the initial state
-// from the actions, even though they currently reside in the same file.
+// --- Shared Slice ---
+const createSharedSlice = (set) => ({
+  mode: 'TX',
+  setMode: (mode) => set({ mode }),
+});
 
-// 1. Define the Initial State
-const initialState = {
-  isAppReady: false,
-  userPreferences: {
-    theme: 'dark',
-    // additional preferences can be added here
-  },
-};
+// --- Transmitter (TX) Slice ---
+const createTransmitterSlice = (set) => ({
+  inputText: '',
+  setInputText: (text) => set({ inputText: text }),
+  encodedChunks: [],
+  setEncodedChunks: (chunks) => set({ encodedChunks: chunks }),
+  cellSize: 25,
+  setCellSize: (size) => set({ cellSize: size }),
+});
 
-// 2. Define the Store using create
-export const useStore = create((set, get) => ({
-  ...initialState,
+// --- Receiver (RX) Slice ---
+const createReceiverSlice = (set) => ({
+  cameraStream: null,
+  setCameraStream: (stream) => set({ cameraStream: stream }),
+  cameraError: null,
+  setCameraError: (error) => set({ cameraError: error }),
+  isScanning: false,
+  setIsScanning: (scanning) => set({ isScanning: scanning }),
+  zoomLevel: 1,
+  setZoomLevel: (level) => set({ zoomLevel: level }),
+  zoomCapabilities: null,
+  setZoomCapabilities: (capabilities) => set({ zoomCapabilities: capabilities }),
+  isLocked: false,
+  setIsLocked: (locked) => set({ isLocked: locked }),
+  decodedMessage: '',
+  setDecodedMessage: (message) => set({ decodedMessage: message }),
+});
 
-  // Actions
-  // A simple action to toggle application readiness
-  setAppReady: (status) => set({ isAppReady: status }),
-
-  // An action to update user preferences, demonstrating merging of nested objects
-  updateUserPreferences: (newPreferences) => set((state) => ({
-    userPreferences: {
-      ...state.userPreferences,
-      ...newPreferences,
-    }
-  })),
-
-  // An action to reset the entire store back to its initial state
-  resetStore: () => set(initialState),
+// --- Root Store ---
+export const useStore = create((...a) => ({
+  ...createSharedSlice(...a),
+  ...createTransmitterSlice(...a),
+  ...createReceiverSlice(...a),
 }));
 
 export default useStore;

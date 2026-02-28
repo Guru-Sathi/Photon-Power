@@ -1,29 +1,42 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useRef, useEffect, useCallback } from 'react';
 import { textToBinary, createChunks, COLORS, getColorBits, binaryToASCII } from '@/lib/protocol';
+import { useStore } from '@/store/useStore';
 
 export default function PhotonInterface() {
-  const [mode, setMode] = useState('TX');
+  const mode = useStore((state) => state.mode);
+  const setMode = useStore((state) => state.setMode);
 
   // TX State
-  const [inputText, setInputText] = useState("");
-  const [encodedChunks, setEncodedChunks] = useState([]);
+  const inputText = useStore((state) => state.inputText);
+  const setInputText = useStore((state) => state.setInputText);
+  const encodedChunks = useStore((state) => state.encodedChunks);
+  const setEncodedChunks = useStore((state) => state.setEncodedChunks);
+  const cellSize = useStore((state) => state.cellSize);
+  const setCellSize = useStore((state) => state.setCellSize);
   const canvasRef = useRef(null);
 
   // RX State
   const videoRef = useRef(null);
-  const [cameraStream, setCameraStream] = useState(null);
-  const [cameraError, setCameraError] = useState(null);
-  const [isScanning, setIsScanning] = useState(false);
-  const [zoomLevel, setZoomLevel] = useState(1);
-  const [zoomCapabilities, setZoomCapabilities] = useState(null);
+  const cameraStream = useStore((state) => state.cameraStream);
+  const setCameraStream = useStore((state) => state.setCameraStream);
+  const cameraError = useStore((state) => state.cameraError);
+  const setCameraError = useStore((state) => state.setCameraError);
+  const isScanning = useStore((state) => state.isScanning);
+  const setIsScanning = useStore((state) => state.setIsScanning);
+  const zoomLevel = useStore((state) => state.zoomLevel);
+  const setZoomLevel = useStore((state) => state.setZoomLevel);
+  const zoomCapabilities = useStore((state) => state.zoomCapabilities);
+  const setZoomCapabilities = useStore((state) => state.setZoomCapabilities);
 
   // Perspective Scanner State
   const processingCanvasRef = useRef(null);
   const displayCanvasRef = useRef(null); // Overlay for drawing quad and dots
-  const [isLocked, setIsLocked] = useState(false);
-  const [decodedMessage, setDecodedMessage] = useState("");
+  const isLocked = useStore((state) => state.isLocked);
+  const setIsLocked = useStore((state) => state.setIsLocked);
+  const decodedMessage = useStore((state) => state.decodedMessage);
+  const setDecodedMessage = useStore((state) => state.setDecodedMessage);
 
   const requestRef = useRef();
   const lastLogTime = useRef(0);
@@ -31,8 +44,8 @@ export default function PhotonInterface() {
   // Constants
   const COLS = 14;
   const ROWS = 14;
-  const CELL_SIZE = 25; // Smaller to fit
-  const CANVAS_SIZE = COLS * CELL_SIZE;
+  // CELL_SIZE is now a state
+  const CANVAS_SIZE = COLS * cellSize;
   const PROBE_SIZE = 20;
   const GRID_COUNT = 14;
 
@@ -46,7 +59,7 @@ export default function PhotonInterface() {
     const binary = textToBinary(inputText);
     const chunks = createChunks(binary);
     setEncodedChunks(chunks);
-  }, [inputText, mode]);
+  }, [inputText, mode, setEncodedChunks]);
 
   useEffect(() => {
     if (mode !== 'TX') return;
@@ -102,10 +115,10 @@ export default function PhotonInterface() {
       // Temporary fill for non-data logic parts
       if (colorCode !== "000" && colorCode !== undefined) {
           const color = COLORS[colorCode] || "#000000";
-          const x = col * CELL_SIZE;
-          const y = row * CELL_SIZE;
+          const x = col * cellSize;
+          const y = row * cellSize;
           ctx.fillStyle = color;
-          ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+          ctx.fillRect(x, y, cellSize, cellSize);
       }
     }
 
@@ -121,22 +134,22 @@ export default function PhotonInterface() {
             if (dataIndex < encodedChunks.length) {
                 const chunk = encodedChunks[dataIndex];
                 const color = COLORS[chunk] || "#000000";
-                const x = col * CELL_SIZE;
-                const y = row * CELL_SIZE;
+                const x = col * cellSize;
+                const y = row * cellSize;
                 ctx.fillStyle = color;
-                ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+                ctx.fillRect(x, y, cellSize, cellSize);
             } else {
                 // Out of data, fill black
-                const x = col * CELL_SIZE;
-                const y = row * CELL_SIZE;
+                const x = col * cellSize;
+                const y = row * cellSize;
                 ctx.fillStyle = "#000000";
-                ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+                ctx.fillRect(x, y, cellSize, cellSize);
             }
             dataIndex++;
         }
     }
 
-  }, [encodedChunks, mode]);
+  }, [encodedChunks, mode, cellSize]);
 
   // --- RECEIVER LOGIC ---
   const startCamera = async () => {
@@ -184,7 +197,7 @@ export default function PhotonInterface() {
   };
 
   const handleCellSizeChange = (delta) => {
-      setCellSize(prev => Math.max(5, prev + delta));
+      setCellSize(Math.max(5, cellSize + delta));
   };
 
   const stopCamera = () => {
@@ -210,7 +223,7 @@ export default function PhotonInterface() {
   }, [cameraStream]);
 
   // --- PERSPECTIVE SCANNER LOGIC ---
-  const processFrame = () => {
+  const processFrame = useCallback(function processFrameFunc() {
     if (!videoRef.current || !processingCanvasRef.current || !displayCanvasRef.current || !isScanning) return;
 
     const video = videoRef.current;
@@ -259,7 +272,7 @@ export default function PhotonInterface() {
             }
         }
 
-        const now = Date.now();
+        const now = new Date().getTime();
 
         if (magentaCount > 20 && tl && tr && bl && br) {
             // Check if quadrilateral is "tiny"
@@ -348,8 +361,8 @@ export default function PhotonInterface() {
         }
     }
 
-    requestRef.current = requestAnimationFrame(processFrame);
-  };
+    requestRef.current = requestAnimationFrame(processFrameFunc);
+  }, [isScanning, setIsLocked, decodedMessage, setDecodedMessage]);
 
   useEffect(() => {
     if (isScanning) {
@@ -357,7 +370,11 @@ export default function PhotonInterface() {
     } else {
         if (requestRef.current) cancelAnimationFrame(requestRef.current);
     }
-  }, [isScanning]);
+
+    return () => {
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+    };
+  }, [isScanning, processFrame]);
 
 
   // --- RENDER ---
